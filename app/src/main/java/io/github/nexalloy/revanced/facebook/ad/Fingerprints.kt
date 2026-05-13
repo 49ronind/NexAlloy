@@ -56,10 +56,26 @@ val listBuilderFactoryFingerprint = findMethodDirect {
 }
 
 // ─── Plugin packs ─────────────────────────────────────────────────────────────
-// Upstream now blocks BOTH FbShortsViewerPluginPack AND MarketplaceAdsPluginPack.
 
 val pluginPackMethodsFingerprint = findMethodListDirect {
-    listOf("FbShortsViewerPluginPack", "MarketplaceAdsPluginPack").flatMap { tag ->
+    listOf(
+        "FbShortsViewerPluginPack",
+        "MarketplaceAdsPluginPack",
+        "FbShortsFeedUnitPluginPack",
+        "FbShortsDynamicMidCardPluginPack",
+        "VideoAdsWatchAndBrowsePluginPack",
+        "VideoAdsWatchAndBrowseFullscreenPluginPack",
+        "VideoHomeReelsPluginPack",
+        "VideoHomeVideoAdsPluginPack",
+        "ShortFormVideoInFeedUnitPluginPack",
+        "UnifiedPlayerFbShortsParadePluginPack",
+        "FbShortsInspirationPagePluginPack",
+        "PlayableAdOverlayPluginPack",
+        "AdsSmartOverlayPluginPack",
+        "AdBreakPluginPack",
+        "AdBreakFooterPluginPack",
+        "InlineVideoAdsFooterPluginPack",
+    ).flatMap { tag ->
         findClass {
             matcher {
                 methods {
@@ -97,6 +113,23 @@ val reelsBannerRenderMethodsFingerprint = findMethodListDirect {
             matcher { paramCount = 1; usingStrings(tag) }
         }.filter { m -> !m.isConstructor }
     }.distinctBy { it.descriptor }
+}
+
+// ─── Profile Reels async ad query ─────────────────────────────────────────────
+
+val profileReelsAsyncAdsQueryFingerprint = findMethodDirect {
+    findMethod {
+        matcher {
+            returnType = "void"
+            paramTypes(
+                "com.facebook.auth.usersession.FbUserSession",
+                "java.lang.Integer",
+                "java.lang.Integer",
+                "boolean"
+            )
+            usingStrings("ProfileReelsAsyncAdsQuery")
+        }
+    }.first { !it.isConstructor }
 }
 
 // ─── Feed CSR cache filter ────────────────────────────────────────────────────
