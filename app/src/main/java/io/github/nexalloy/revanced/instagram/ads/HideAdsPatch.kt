@@ -8,6 +8,7 @@ val HideAds = patch(
     name = "Hide ads",
 ) {
     ::adInjectorFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
-
     ::adSponsoredContentFingerprint.hookMethod(XC_MethodReplacement.returnConstant(false))
+    ::adV2DeliveryFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
+    ::adV2InsertGateFingerprint.hookMethod(XC_MethodReplacement.returnConstant(false))
 }
