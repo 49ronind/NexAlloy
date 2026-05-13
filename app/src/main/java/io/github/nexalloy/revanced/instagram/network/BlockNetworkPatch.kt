@@ -23,6 +23,10 @@ val BlockNetwork = patch(
                 path.contains("/async_ads/") ||
                 path.contains("/feed/injected_reels_media/") ||
                 path == "/api/v1/ads/graphql/" ||
+                path.startsWith("/api/v1/ads/") ||
+                path.contains("/reels_ads/") ||
+                path.contains("/feed/ads/") ||
+                path.contains("/graphql/ads_query/") ||
                 host.contains("graph.instagram.com") ||
                 host.contains("graph.facebook.com") ||
                 path.contains("/logging_client_events")
