@@ -1,4 +1,4 @@
-package io.github.nexalloy.revanced.instagram.ads
+package io.github.nexalloy.revanced.threads.ads
 
 import io.github.nexalloy.morphe.findMethodDirect
 
