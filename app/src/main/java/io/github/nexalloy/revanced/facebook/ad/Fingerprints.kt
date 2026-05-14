@@ -18,41 +18,69 @@ val adKindEnumFingerprint = findClassDirect {
 // Fallback: structural signature (static 6-param void + static 5-param ArrayList)
 
 val listBuilderClassFingerprint = findClassDirect {
-    // Primary: string-based
+    // Primary: string-based (hoạt động cả v560 và v561 vì string không đổi)
     val byString = findClass {
         matcher { usingStrings("Non ads story fall into ads rendering logic, StoryType=%s, StoryId=%s") }
     }.firstOrNull()
     if (byString != null) return@findClassDirect byString
 
-    // Fallback: structural
+    // Fallback structural: tìm class có static void với List là param cuối (6 hoặc 7 params)
     findMethod {
         matcher {
             modifiers = Modifier.STATIC
             returnType = "void"
-            paramTypes(null, null, null, null, null, "java.util.List")
+            paramTypes(null, null, null, null, null, null, "java.util.List")
         }
-    }.first { md ->
+    }.firstOrNull { md ->
         md.declaredClass?.methods?.any { m ->
             m.isMethod && (m.modifiers and Modifier.STATIC) != 0 &&
-            m.paramCount == 5 && m.paramTypeNames.getOrNull(4) == "boolean"
+            m.paramCount == 6 && m.paramTypeNames.getOrNull(5) == "boolean"
         } == true
-    }.declaredClass!!
+    }?.declaredClass
+        ?: findMethod {
+            matcher {
+                modifiers = Modifier.STATIC
+                returnType = "void"
+                paramTypes(null, null, null, null, null, "java.util.List")
+            }
+        }.first { md ->
+            md.declaredClass?.methods?.any { m ->
+                m.isMethod && (m.modifiers and Modifier.STATIC) != 0 &&
+                m.paramCount == 5 && m.paramTypeNames.getOrNull(4) == "boolean"
+            } == true
+        }.declaredClass!!
 }
 
 val listBuilderAppendFingerprint = findMethodDirect {
-    listBuilderClassFingerprint().findMethod {
+    val cls = listBuilderClassFingerprint()
+    // v561+: 7-param static void (..., java.util.List)
+    cls.findMethod {
         matcher {
             modifiers = Modifier.STATIC
             returnType = "void"
-            paramTypes(null, null, null, null, null, "java.util.List")
+            paramTypes(null, null, null, null, null, null, "java.util.List")
         }
-    }.single()
+    }.singleOrNull()
+    // pre-561: 6-param static void (..., java.util.List)
+        ?: cls.findMethod {
+            matcher {
+                modifiers = Modifier.STATIC
+                returnType = "void"
+                paramTypes(null, null, null, null, null, "java.util.List")
+            }
+        }.single()
 }
 
 val listBuilderFactoryFingerprint = findMethodDirect {
-    listBuilderClassFingerprint().findMethod {
-        matcher { modifiers = Modifier.STATIC; paramCount = 5 }
-    }.first { it.paramTypeNames.getOrNull(4) == "boolean" }
+    val cls = listBuilderClassFingerprint()
+    // v561+: 6 params, boolean ở cuối (index 5)
+    cls.findMethod {
+        matcher { modifiers = Modifier.STATIC; paramCount = 6 }
+    }.firstOrNull { it.paramTypeNames.getOrNull(5) == "boolean" }
+    // pre-561: 5 params, boolean ở cuối (index 4)
+        ?: cls.findMethod {
+            matcher { modifiers = Modifier.STATIC; paramCount = 5 }
+        }.first { it.paramTypeNames.getOrNull(4) == "boolean" }
 }
 
 // ─── Plugin packs ─────────────────────────────────────────────────────────────

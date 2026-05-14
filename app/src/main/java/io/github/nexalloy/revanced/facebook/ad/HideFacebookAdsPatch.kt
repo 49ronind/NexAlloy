@@ -58,7 +58,9 @@ val HideFacebookAds = patch(
     val adKindEnumClass = ::adKindEnumFingerprint.clazz
     val storyInspector  = AdStoryInspector(adKindEnumClass)
 
-    hookListBuilderAppend(::listBuilderAppendFingerprint.method, storyInspector)
+    runCatching {
+        hookListBuilderAppend(::listBuilderAppendFingerprint.method, storyInspector)
+    }
 
     runCatching {
         hookListResultFilter(::listBuilderFactoryFingerprint.method, "list factory", storyInspector)
