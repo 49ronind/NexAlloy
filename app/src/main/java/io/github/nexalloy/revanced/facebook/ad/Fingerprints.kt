@@ -163,7 +163,7 @@ val profileReelsAsyncAdsQueryFingerprint = findMethodDirect {
 // ─── Feed CSR cache filter ────────────────────────────────────────────────────
 
 val feedCsrFilterMethodsFingerprint = findMethodListDirect {
-    listOf("FeedCSRCacheFilter", "FeedCSRCacheFilter2025H1", "FeedCSRCacheFilter2026H1").flatMap { tag ->
+    listOf("FeedCSRCacheFilter", "FeedCSRCacheFilter2025H1", "FeedCSRCacheFilter2026H1", "FbShortsCSRCacheFilter").flatMap { tag ->
         findClass {
             matcher { usingStrings(tag) }
         }.flatMap { cls ->
