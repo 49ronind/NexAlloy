@@ -79,6 +79,7 @@ val FEED_AD_SIGNAL_TOKENS = listOf(
     "reels_banner_ad", "reelsbannerads", "reels_post_loop_deferred_card", "deferred_card",
     "adbreakdeferredcta", "instreamadidlewithbannerstate", "instream_legacy_banner_ad",
     "unified_player_banner_ad", "banner_ad_", "floatingcta", "ads_midcard", "friendly_feed_promotion", "high_value_promotion"
+    "ad_label", "adlabel", "ad_unit", "adunit", "nativead", "native_ad", "adchoice", "adchoices", "fbadunit", "fbtv_sponsored"
 )
 
 val REELS_AD_SIGNAL_TOKENS = listOf(
@@ -86,6 +87,7 @@ val REELS_AD_SIGNAL_TOKENS = listOf(
     "reels_banner_ad", "reelsbannerads", "adbreakdeferredcta",
     "instreamadidlewithbannerstate", "instream_legacy_banner_ad",
     "unified_player_banner_ad", "banner_ad_", "ads_midcard"
+    "ad_label", "adlabel", "adunit", "adchoice", "adchoices"
 )
 
 val GAME_AD_METHOD_TAGS = listOf(
@@ -287,7 +289,7 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
         val accessor = cachedMethod(categoryMethodCache, value.javaClass) {
             allInstanceMethods(value.javaClass).firstOrNull { m ->
                 m.parameterCount == 0 && m.returnType.isEnum &&
-                m.returnType.enumConstants?.any { val n = it.toString(); n == "SPONSORED" || n == "PROMOTION" } == true
+                m.returnType.enumConstants?.any { val n = it.toString(); n == "SPONSORED" || n == "PROMOTION" || n == "AD" || n == "ADVERTISEMENT" } == true
             }?.apply { isAccessible = true }
         }
         return invokeNoThrow(accessor, value)?.toString()
