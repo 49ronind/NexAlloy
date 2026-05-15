@@ -52,19 +52,31 @@ val listBuilderClassFingerprint = findClassDirect {
 }
 
 val listBuilderAppendFingerprint = findMethodDirect {
-    listBuilderClassFingerprint().findMethod {
+    val cls = listBuilderClassFingerprint()
+    cls.findMethod {
         matcher {
             modifiers = Modifier.STATIC
             returnType = "void"
-            paramTypes(null, null, null, null, null, "java.util.List")
+            paramTypes(null, null, null, null, null, null, "java.util.List")
         }
     }.single()
+        ?: cls.findMethod {
+            matcher {
+                modifiers = Modifier.STATIC
+                returnType = "void"
+                paramTypes(null, null, null, null, null, "java.util.List")
+            }
+        }.single()
 }
 
 val listBuilderFactoryFingerprint = findMethodDirect {
-    listBuilderClassFingerprint().findMethod {
-        matcher { modifiers = Modifier.STATIC; paramCount = 5 }
-    }.first { it.paramTypeNames.getOrNull(4) == "boolean" }
+    val cls = listBuilderClassFingerprint()
+    cls.findMethod {
+        matcher { modifiers = Modifier.STATIC; paramCount = 6 }
+    }.first { it.paramTypeNames.getOrNull(5) == "boolean" }
+        ?: cls.findMethod {
+            matcher { modifiers = Modifier.STATIC; paramCount = 5 }
+        }.first { it.paramTypeNames.getOrNull(4) == "boolean" }
 }
 
 // ─── Plugin packs ─────────────────────────────────────────────────────────────
