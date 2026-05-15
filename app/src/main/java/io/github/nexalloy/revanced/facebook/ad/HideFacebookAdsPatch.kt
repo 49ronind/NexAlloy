@@ -188,4 +188,9 @@ val HideFacebookAds = patch(
 
     runCatching { hookGlobalGameAdSurfaceFallbacks() }
 
+    // ── 14. ProfileReelsAsyncAdsQuery dispatch block ────────────────────
+
+    runCatching {
+        ::profileReelsAsyncAdsQueryFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
+    }
 }
