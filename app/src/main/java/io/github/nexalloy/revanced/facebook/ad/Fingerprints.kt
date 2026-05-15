@@ -29,14 +29,26 @@ val listBuilderClassFingerprint = findClassDirect {
         matcher {
             modifiers = Modifier.STATIC
             returnType = "void"
-            paramTypes(null, null, null, null, null, "java.util.List")
+            paramTypes(null, null, null, null, null, null, "java.util.List")
         }
     }.first { md ->
         md.declaredClass?.methods?.any { m ->
             m.isMethod && (m.modifiers and Modifier.STATIC) != 0 &&
             m.paramCount == 5 && m.paramTypeNames.getOrNull(4) == "boolean"
         } == true
-    }.declaredClass!!
+    }?.declaredClass
+        ?: findMethod {
+            matcher {
+                modifiers = Modifier.STATIC
+                returnType = "void"
+                paramTypes(null, null, null, null, null, "java.util.List")
+            }
+        }.first { md ->
+            md.declaredClass?.methods?.any { m ->
+                m.isMethod && (m.modifiers and Modifier.STATIC) != 0 &&
+                m.paramCount == 5 && m.paramTypeNames.getOrNull(4) == "boolean"
+            } == true
+        }.declaredClass!!
 }
 
 val listBuilderAppendFingerprint = findMethodDirect {
@@ -97,6 +109,23 @@ val reelsBannerRenderMethodsFingerprint = findMethodListDirect {
             matcher { paramCount = 1; usingStrings(tag) }
         }.filter { m -> !m.isConstructor }
     }.distinctBy { it.descriptor }
+}
+
+// ─── Profile Reels async ad query ─────────────────────────────────────────────
+
+val profileReelsAsyncAdsQueryFingerprint = findMethodDirect {
+    findMethod {
+        matcher {
+            returnType = "void"
+            paramTypes(
+                "com.facebook.auth.usersession.FbUserSession",
+                "java.lang.Integer",
+                "java.lang.Integer",
+                "boolean"
+            )
+            usingStrings("ProfileReelsAsyncAdsQuery")
+        }
+    }.first { !it.isConstructor }
 }
 
 // ─── Feed CSR cache filter ────────────────────────────────────────────────────
