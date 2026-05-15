@@ -1,6 +1,7 @@
 package io.github.nexalloy.revanced.facebook.ad
 
 import android.os.Bundle
+import de.robv.android.xposed.XC_MethodReplacement
 import de.robv.android.xposed.XposedBridge
 import io.github.nexalloy.patch
 import io.github.nexalloy.revanced.facebook.AdStoryInspector
