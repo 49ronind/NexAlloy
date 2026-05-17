@@ -87,7 +87,9 @@ val REELS_AD_SIGNAL_TOKENS = listOf(
     "reels_banner_ad", "reelsbannerads", "adbreakdeferredcta",
     "instreamadidlewithbannerstate", "instream_legacy_banner_ad",
     "unified_player_banner_ad", "banner_ad_", "ads_midcard",
-    "ad_label", "adlabel", "adunit", "adchoice", "adchoices"
+    "ad_label", "adlabel", "adunit", "adchoice", "adchoices",
+    "ad_unit", "nativead", "native_ad", "fbadunit", "fbtv_sponsored", "floatingcta",
+    "reels_post_loop_deferred_card", "deferred_card"
 )
 
 val GAME_AD_METHOD_TAGS = listOf(
