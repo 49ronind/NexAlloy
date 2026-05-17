@@ -71,7 +71,7 @@ val AUDIENCE_NETWORK_REWARD_COMPLETION_METHOD_NAMES = setOf(
 
 val AUDIENCE_NETWORK_CLOSE_LISTENER_CLASS_NAMES = setOf("X.mGv", "X.mGo", "p000X.mGv", "p000X.mGo")
 
-val FEED_AD_CATEGORY_VALUES          = setOf("SPONSORED", "PROMOTION", "AD", "ADVERTISEMENT", "BANNER", "FRIENDLY_FEED_PROMOTION", "HIGH_VALUE_PROMOTION", "FRIENDLY_FEED_PROMOTION_GAP_3", "FRIENDS_FEED_BADGED",)
+val FEED_AD_CATEGORY_VALUES          = setOf("SPONSORED", "PROMOTION", "AD", "ADVERTISEMENT", "BANNER", "FRIENDLY_FEED_PROMOTION", "HIGH_VALUE_PROMOTION", "FRIENDLY_FEED_PROMOTION_GAP_3", "FRIENDS_FEED_BADGED", "MULTI_ADS", "QUICK_PROMOTION", "NATIVE_TEMPLATE", "NATIVE_AD")
 val FEED_SAFE_CONTAINER_CATEGORY_VALUES = setOf("FB_SHORTS", "MULTI_FB_STORIES_TRAY")
 
 val FEED_AD_SIGNAL_TOKENS = listOf(
@@ -79,6 +79,8 @@ val FEED_AD_SIGNAL_TOKENS = listOf(
     "reels_banner_ad", "reelsbannerads", "reels_post_loop_deferred_card", "deferred_card",
     "adbreakdeferredcta", "instreamadidlewithbannerstate", "instream_legacy_banner_ad",
     "unified_player_banner_ad", "banner_ad_", "floatingcta", "ads_midcard", "friendly_feed_promotion", "high_value_promotion",
+    "native_template", "quickpromo", "quick_promo",
+    "is_sponsored_content", "ad_label", "highest_ad_type",
     "ad_label", "adlabel", "ad_unit", "adunit", "nativead", "native_ad", "adchoice", "adchoices", "fbadunit", "fbtv_sponsored"
 )
 
@@ -89,6 +91,8 @@ val REELS_AD_SIGNAL_TOKENS = listOf(
     "unified_player_banner_ad", "banner_ad_", "ads_midcard",
     "ad_label", "adlabel", "adunit", "adchoice", "adchoices",
     "ad_unit", "nativead", "native_ad", "fbadunit", "fbtv_sponsored", "floatingcta",
+    "native_template", "quickpromo", "quick_promo",
+    "is_sponsored_content",
     "reels_post_loop_deferred_card", "deferred_card"
 )
 
@@ -291,7 +295,7 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
         val accessor = cachedMethod(categoryMethodCache, value.javaClass) {
             allInstanceMethods(value.javaClass).firstOrNull { m ->
                 m.parameterCount == 0 && m.returnType.isEnum &&
-                m.returnType.enumConstants?.any { val n = it.toString(); n == "SPONSORED" || n == "PROMOTION" || n == "AD" || n == "ADVERTISEMENT" } == true
+                m.returnType.enumConstants?.any { val n = it.toString(); n == "SPONSORED" || n == "PROMOTION" || n == "AD" || n == "ADVERTISEMENT" n == "MULTI_ADS" || n == "QUICK_PROMOTION" || n == "ORGANIC" } == true
             }?.apply { isAccessible = true }
         }
         return invokeNoThrow(accessor, value)?.toString()
