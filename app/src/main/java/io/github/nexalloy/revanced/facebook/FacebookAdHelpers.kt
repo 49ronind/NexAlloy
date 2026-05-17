@@ -295,7 +295,7 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
         val accessor = cachedMethod(categoryMethodCache, value.javaClass) {
             allInstanceMethods(value.javaClass).firstOrNull { m ->
                 m.parameterCount == 0 && m.returnType.isEnum &&
-                m.returnType.enumConstants?.any { val n = it.toString(); n == "SPONSORED" || n == "PROMOTION" || n == "AD" || n == "ADVERTISEMENT" n == "MULTI_ADS" || n == "QUICK_PROMOTION" || n == "ORGANIC" } == true
+                m.returnType.enumConstants?.any { val n = it.toString(); n == "SPONSORED" || n == "PROMOTION" || n == "AD" || n == "ADVERTISEMENT" || n == "MULTI_ADS" || n == "QUICK_PROMOTION" || n == "ORGANIC" } == true
             }?.apply { isAccessible = true }
         }
         return invokeNoThrow(accessor, value)?.toString()
