@@ -60,15 +60,4 @@ val BackgroundPlayback = patch(
             }
         }
     }
-
-    if (is_21_04_or_greater) {
-        // If NewPlayerTypeEnumFeatureFlagFingerprint is present and forced off then this flag
-        // must also be disabled, otherwise the player is a black screen with no buttons and no playback.
-        ::featureFlagCheck.hookMethod {
-            before {
-                if (it.args[0] == 45752335L)
-                    it.result = false
-            }
-        }
-    }
 }
