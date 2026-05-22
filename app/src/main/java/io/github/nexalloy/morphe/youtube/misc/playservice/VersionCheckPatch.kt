@@ -43,6 +43,8 @@ var is_21_02_or_greater = false
     private set
 var is_21_03_or_greater = false
     private set
+var is_21_04_or_greater = false
+       private set
 var is_21_05_or_greater = false
     private set
 var is_21_06_or_greater = false
@@ -90,6 +92,7 @@ val VersionCheck = patch {
     is_20_49_or_greater = isEqualsOrGreaterThan("20.49.00")
     is_21_02_or_greater = isEqualsOrGreaterThan("21.02.000")
     is_21_03_or_greater = isEqualsOrGreaterThan("21.03.000")
+    is_21_04_or_greater = isEqualsOrGreaterThan("21.04.000")
     is_21_05_or_greater = isEqualsOrGreaterThan("21.05.000")
     is_21_06_or_greater = isEqualsOrGreaterThan("21.06.000")
     is_21_07_or_greater = isEqualsOrGreaterThan("21.07.000")
