@@ -33,6 +33,9 @@ val BackgroundPlayback = patch(
         }
     }
 
+    NewPlayerTypeEnumFeatureFlagFingerprint.hookMethod(returnConstant(false))
+    NewPlayerOverlaysFeatureFlagFingerprint.hookMethod(returnConstant(false))
+    
     // Enable background playback option in YouTube settings
     ::backgroundPlaybackSettingsSubFingerprint.hookMethod(returnConstant(true))
 
