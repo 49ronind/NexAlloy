@@ -17,3 +17,4 @@ val HideAds = patch(
         ::paidPartnershipLabelFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
         ::adMetadataFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
     }
+}
