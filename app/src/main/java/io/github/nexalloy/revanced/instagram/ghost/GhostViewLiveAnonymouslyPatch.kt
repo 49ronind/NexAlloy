@@ -3,6 +3,7 @@ package io.github.nexalloy.revanced.instagram.ghost
 import app.morphe.extension.shared.Logger
 import io.github.nexalloy.findFieldByExactType
 import io.github.nexalloy.patch
+import io.github.nexalloy.revanced.instagram.network.networkInterceptorFingerprint
 import java.net.URI
 
 val GhostViewLiveAnonymously = patch(

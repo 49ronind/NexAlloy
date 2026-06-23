@@ -41,60 +41,58 @@ val GhostChannelMarkAsRead = patch(
     // fingerprints work at bytecode level and View is a framework class not
     // present in the Instagram APK. We therefore fall back to the raw
     // XposedHelpers API — the same approach InstaEclipse uses.
-    execute { _, _ ->
-        try {
-            XposedHelpers.findAndHookMethod(
-                View::class.java,
-                "onAttachedToWindow",
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        val view = param.thisObject as? View ?: return
-                        val context = view.context ?: return
+    try {
+        XposedHelpers.findAndHookMethod(
+            View::class.java,
+            "onAttachedToWindow",
+            object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val view = param.thisObject as? View ?: return
+                    val context = view.context ?: return
 
-                        // Resolve seen_state_text ID once.
-                        if (sCachedSeenStateId == 0) {
-                            @SuppressLint("DiscouragedApi")
-                            val id = context.resources.getIdentifier(
-                                "seen_state_text", "id", context.packageName
-                            )
-                            sCachedSeenStateId = id
-                        }
+                    // Resolve seen_state_text ID once.
+                    if (sCachedSeenStateId == 0) {
+                        @SuppressLint("DiscouragedApi")
+                        val id = context.resources.getIdentifier(
+                            "seen_state_text", "id", context.packageName
+                        )
+                        sCachedSeenStateId = id
+                    }
 
-                        if (sCachedSeenStateId == 0 || view.id != sCachedSeenStateId) return
-                        val seenTextView = view as? TextView ?: return
+                    if (sCachedSeenStateId == 0 || view.id != sCachedSeenStateId) return
+                    val seenTextView = view as? TextView ?: return
 
-                        // Skip audio/video-call and blend screens.
-                        if (sCachedHeaderButtonsId == 0) {
-                            @SuppressLint("DiscouragedApi")
-                            val id = context.resources.getIdentifier(
-                                "header_right_buttons", "id", context.packageName
-                            )
-                            sCachedHeaderButtonsId = id
-                        }
+                    // Skip audio/video-call and blend screens.
+                    if (sCachedHeaderButtonsId == 0) {
+                        @SuppressLint("DiscouragedApi")
+                        val id = context.resources.getIdentifier(
+                            "header_right_buttons", "id", context.packageName
+                        )
+                        sCachedHeaderButtonsId = id
+                    }
 
-                        if (sCachedHeaderButtonsId != 0) {
-                            val container =
-                                view.rootView.findViewById<View>(sCachedHeaderButtonsId)
-                            if (container is ViewGroup) {
-                                for (i in 0 until container.childCount) {
-                                    val desc =
-                                        container.getChildAt(i).contentDescription?.toString()
-                                            ?.lowercase() ?: continue
-                                    if (desc.contains("audio call") ||
-                                        desc.contains("video call") ||
-                                        desc.contains("blend")
-                                    ) return
-                                }
+                    if (sCachedHeaderButtonsId != 0) {
+                        val container =
+                            view.rootView.findViewById<View>(sCachedHeaderButtonsId)
+                        if (container is ViewGroup) {
+                            for (i in 0 until container.childCount) {
+                                val desc =
+                                    container.getChildAt(i).contentDescription?.toString()
+                                        ?.lowercase() ?: continue
+                                if (desc.contains("audio call") ||
+                                    desc.contains("video call") ||
+                                    desc.contains("blend")
+                                ) return
                             }
                         }
-
-                        updateChannelSeen(seenTextView)
                     }
+
+                    updateChannelSeen(seenTextView)
                 }
-            )
-        } catch (t: Throwable) {
-            Logger.printException({ "GhostChannelMarkAsRead hook failed" }, t)
-        }
+            }
+        )
+    } catch (t: Throwable) {
+        Logger.printException({ "GhostChannelMarkAsRead hook failed" }, t)
     }
 }
 

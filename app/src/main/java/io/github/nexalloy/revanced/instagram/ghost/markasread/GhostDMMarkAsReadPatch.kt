@@ -39,38 +39,36 @@ val GhostDMMarkAsRead = patch(
     description = "Injects a ghost button into the DM composer bar. " +
             "Tapping it silently marks the conversation as read while Ghost Mode is enabled.",
 ) {
-    execute { _, _ ->
-        try {
-            XposedHelpers.findAndHookMethod(
-                View::class.java,
-                "onAttachedToWindow",
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        val view = param.thisObject as? View ?: return
+    try {
+        XposedHelpers.findAndHookMethod(
+            View::class.java,
+            "onAttachedToWindow",
+            object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val view = param.thisObject as? View ?: return
 
-                        // Resolve composer container ID once.
-                        if (sCachedComposerContainerId == 0) {
-                            @SuppressLint("DiscouragedApi")
-                            val id = view.context.resources.getIdentifier(
-                                "row_thread_composer_buttons_container",
-                                "id",
-                                view.context.packageName
-                            )
-                            sCachedComposerContainerId = id
-                        }
-
-                        if (sCachedComposerContainerId == 0 ||
-                            view.id != sCachedComposerContainerId
-                        ) return
-
-                        val parent = view.parent as? ViewGroup ?: return
-                        injectGhostButton(parent)
+                    // Resolve composer container ID once.
+                    if (sCachedComposerContainerId == 0) {
+                        @SuppressLint("DiscouragedApi")
+                        val id = view.context.resources.getIdentifier(
+                            "row_thread_composer_buttons_container",
+                            "id",
+                            view.context.packageName
+                        )
+                        sCachedComposerContainerId = id
                     }
+
+                    if (sCachedComposerContainerId == 0 ||
+                        view.id != sCachedComposerContainerId
+                    ) return
+
+                    val parent = view.parent as? ViewGroup ?: return
+                    injectGhostButton(parent)
                 }
-            )
-        } catch (t: Throwable) {
-            Logger.printException({ "GhostDMMarkAsRead hook failed" }, t)
-        }
+            }
+        )
+    } catch (t: Throwable) {
+        Logger.printException({ "GhostDMMarkAsRead hook failed" }, t)
     }
 }
 
