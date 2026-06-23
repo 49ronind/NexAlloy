@@ -25,40 +25,38 @@ val GhostViewStoryMentions = patch(
     description = "Adds a button in story options to view (and open) all tagged users " +
             "— including mentions hidden from the story viewer.",
 ) {
-    execute { _, classLoader ->
-        try {
-            XposedHelpers.findAndHookMethod(
-                View::class.java,
-                "onAttachedToWindow",
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        val view = param.thisObject as? View ?: return
-                        val ctx = view.context ?: return
+    try {
+        XposedHelpers.findAndHookMethod(
+            View::class.java,
+            "onAttachedToWindow",
+            object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val view = param.thisObject as? View ?: return
+                    val ctx = view.context ?: return
 
-                        // We look for the story viewer root to attach our button.
-                        // Instagram's story option panel uses "reel_viewer_options"
-                        // or similar as the container id.
-                        if (sCachedStoryOptionsId == 0) {
-                            @SuppressLint("DiscouragedApi")
-                            val id = ctx.resources.getIdentifier(
-                                "reel_viewer_options_container", "id", ctx.packageName
-                            ).takeIf { it != 0 }
-                                ?: ctx.resources.getIdentifier(
-                                    "story_viewer_options", "id", ctx.packageName
-                                )
-                            sCachedStoryOptionsId = id
-                        }
-
-                        if (sCachedStoryOptionsId == 0 || view.id != sCachedStoryOptionsId) return
-                        val container = view as? ViewGroup ?: return
-
-                        injectMentionsButton(container, ctx)
+                    // We look for the story viewer root to attach our button.
+                    // Instagram's story option panel uses "reel_viewer_options"
+                    // or similar as the container id.
+                    if (sCachedStoryOptionsId == 0) {
+                        @SuppressLint("DiscouragedApi")
+                        val id = ctx.resources.getIdentifier(
+                            "reel_viewer_options_container", "id", ctx.packageName
+                        ).takeIf { it != 0 }
+                            ?: ctx.resources.getIdentifier(
+                                "story_viewer_options", "id", ctx.packageName
+                            )
+                        sCachedStoryOptionsId = id
                     }
+
+                    if (sCachedStoryOptionsId == 0 || view.id != sCachedStoryOptionsId) return
+                    val container = view as? ViewGroup ?: return
+
+                    injectMentionsButton(container, ctx)
                 }
-            )
-        } catch (t: Throwable) {
-            Logger.printException({ "GhostViewStoryMentions hook failed" }, t)
-        }
+            }
+        )
+    } catch (t: Throwable) {
+        Logger.printException({ "GhostViewStoryMentions hook failed" }, t)
     }
 }
 
