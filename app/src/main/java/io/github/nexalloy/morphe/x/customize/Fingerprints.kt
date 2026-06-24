@@ -5,6 +5,7 @@ import io.github.nexalloy.morphe.Fingerprint
 import io.github.nexalloy.morphe.Opcode
 import io.github.nexalloy.morphe.opcode
 import io.github.nexalloy.morphe.string
+import org.luckypray.dexkit.query.enums.StringMatchType
 
 // ── Navigation bar ───────────────────────────────────────────────────────────
 
@@ -82,7 +83,7 @@ internal object InlineBarBuilderFingerprint : Fingerprint(
     strings = listOf(
         "reply", "retweet", "like", "share",
     ),
-    custom = { _, cls -> cls.contains("inlineactions") },
+    custom = { declaredClass { className("inlineactions", StringMatchType.Contains) } },
 )
 
 // ── Type-ahead (search-as-you-type) ─────────────────────────────────────────
