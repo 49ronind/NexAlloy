@@ -26,9 +26,7 @@ val ResponseLogging = patch(
                 val bytes = inputStream.readBytes()
                 val logDir = appContext.getExternalFilesDir(null) ?: return@before
                 val logFile = File(logDir, "nexalloy_x_response.json")
-                logFile.appendText(String(bytes) + "
----
-")
+                logFile.appendText(String(bytes) + "\n---\n")
                 Logger.printDebug { "ResponseLogging: wrote ${bytes.size} bytes" }
                 // Replace the stream so Jackson can still read it
                 param.args[param.args.indexOfFirst { it is InputStream }] =
