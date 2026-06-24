@@ -11,6 +11,7 @@ import io.github.nexalloy.revanced.threads.ThreadsPatches
 import io.github.nexalloy.revanced.facebook.FacebookPatches
 import io.github.nexalloy.revanced.photomath.PhotomathPatches
 import io.github.nexalloy.revanced.strava.StravaPatches
+import io.github.nexalloy.morphe.x.XPatches
 
 class AppPatchInfo(val appName: String, val packageName: String, val patches: Array<Patch>)
 
@@ -26,6 +27,7 @@ val appPatchConfigurations = listOf(
     AppPatchInfo("AllTrails", "com.alltrails.alltrails", AllTrailsPatches),
     AppPatchInfo("Facebook", "com.facebook.katana", FacebookPatches),
     AppPatchInfo("Google (Discover)", "com.google.android.googlequicksearchbox", GoogleDiscoverPatches),
+    AppPatchInfo("X (Twitter)", "com.twitter.android", XPatches),
 )
 
 val patchesByPackage = appPatchConfigurations.associate { it.packageName to it.patches }
