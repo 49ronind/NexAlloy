@@ -5,6 +5,7 @@ import io.github.nexalloy.morphe.Fingerprint
 import io.github.nexalloy.morphe.Opcode
 import io.github.nexalloy.morphe.opcode
 import io.github.nexalloy.morphe.string
+import org.luckypray.dexkit.query.enums.StringMatchType
 
 /** DownloadManager request builder – used to intercept the download path. */
 internal object DownloadPathFingerprint : Fingerprint(
@@ -23,8 +24,8 @@ internal object DownloadPathFingerprint : Fingerprint(
 internal object MediaDownloaderFingerprint : Fingerprint(
     returnType = "Z",
     strings = listOf("url", "video_download"),
-    custom = { _, classDef ->
-        classDef.contains("tweetview/core/ui/mediaoptionssheet")
+    custom = {
+        declaredClass { className("tweetview/core/ui/mediaoptionssheet", StringMatchType.Contains) }
     },
 )
 
