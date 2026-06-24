@@ -1,6 +1,5 @@
 package io.github.nexalloy.morphe.x.timeline
 
-import com.twitter.model.json.core.JsonTweetQuickPromoteEligibility
 import io.github.nexalloy.morphe.x.common.XVersionCheck
 import io.github.nexalloy.patch
 
