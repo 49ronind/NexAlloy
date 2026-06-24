@@ -74,8 +74,8 @@ internal object OcfCtaStepDynamicFingerprint : Fingerprint(
 /** Jackson InputStream factory – for response logging. */
 internal object InputStreamFingerprint : Fingerprint(
     definingClass = "/fasterxml/jackson/core/",
+    returnType = "/fasterxml/jackson/core/",
     parameters = listOf("Ljava/io/InputStream;"),
-    custom = { m, _ -> m.returnType.contains("/fasterxml/jackson/core/") },
 )
 
 /** emoji2 CharSequence hook for custom font. */
