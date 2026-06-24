@@ -117,7 +117,7 @@ internal object EnableVidAutoAdvanceFingerprint : Fingerprint(
 internal object PlayerSupportFingerprint : Fingerprint(
     definingClass = "/av/player/support/",
     accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.STATIC),
-    custom = { m, _ -> m.parameterTypes.size == 2 },
+    custom = { paramCount(2) },
 )
 
 /** JsonProfileRecommendationModuleResponse – recommended users. */
