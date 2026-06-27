@@ -1730,7 +1730,13 @@ private fun hideResolvedAdSurfaceTarget(
     if (target.visibility != View.GONE) { target.visibility = View.GONE; hidden = true }
     target.minimumHeight = 0
     target.layoutParams?.let { params ->
-        if (forceCollapseHeight || target !== source ||
+        // NOTE: deliberately NOT "target !== source" here — that used to make height
+        // collapse unconditional the moment resolveLikelyAdContainerTarget climbed even
+        // one level up, regardless of whether the climbed-to ancestor was ever verified
+        // as an ad surface. Each accepted reason below corresponds to a real signal:
+        // forceCollapseHeight is only passed by the already-verified explicit-card path,
+        // and the source-based checks cover the (also pre-verified) feed-marker paths.
+        if (forceCollapseHeight ||
             isLikelyBannerSized(target, root) || isPotentialNativeGameAdView(target) ||
             isPotentialFeedAdMarkerView(source) || isPotentialExplicitFeedAdMarkerView(source)) {
             params.height = 0; target.layoutParams = params; hidden = true
@@ -1752,7 +1758,14 @@ private fun hideLikelyFeedReelCtaAdContainer(view: View, reason: String): Boolea
 
 /** Walks up from [view] while the parent still looks like a single post container
  *  (≥82% root width, height bounded relative to root and to the child) — used by
- *  the native-ad / game-ad fallback path where we don't have explicit text markers. */
+ *  the native-ad / game-ad fallback path where we don't have explicit text markers.
+ *
+ *  IMPORTANT: this is a geometry-only walk (no text/marker signal at all), so the
+ *  climbed-to ancestor is NOT trusted blindly. We only return it if it still verifies
+ *  as an actual ad surface (banner-sized, or itself a native-ad-SDK view class) —
+ *  otherwise we fall back to the originally matched [view], so an unverified wrapper
+ *  around real content (e.g. a profile card) never gets hidden just because the climb
+ *  happened to reach it. */
 private fun resolveLikelyAdContainerTarget(view: View): View {
     val root = view.rootView ?: return view
     var current = view
@@ -1772,11 +1785,13 @@ private fun resolveLikelyAdContainerTarget(view: View): View {
         if (currentHeight > 0 && parentHeight > maxOf((currentHeight * 1.25f).toInt(), currentHeight + 180)) break
         selected = parentView; current = parentView
     }
-    return selected
+    if (selected === view) return view
+    return if (isLikelyBannerSized(selected, root) || isPotentialNativeGameAdView(selected)) selected else view
 }
 
 private fun shouldUseFeedMarkerCardTarget(view: View): Boolean =
-    isPotentialFeedAdMarkerView(view) || (view is TextView && isFeedAdMarkerText(view.text))
+    ENABLE_FEED_UI_MARKER_FALLBACKS &&
+        (isPotentialFeedAdMarkerView(view) || (view is TextView && isFeedAdMarkerText(view.text)))
 
 private fun shouldUseExplicitFeedMarkerCardTarget(view: View): Boolean =
     isPotentialExplicitFeedAdMarkerView(view) || (view is TextView && isExplicitFeedAdMarkerText(view.text))
