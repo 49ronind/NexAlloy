@@ -11,6 +11,7 @@ import io.github.nexalloy.morphe.twitter.timeline.disableAutoScroll.DisableAutoS
 import io.github.nexalloy.morphe.twitter.timeline.forceHD.ForceHD
 import io.github.nexalloy.morphe.twitter.timeline.removePremiumUpsell.RemovePremiumUpsell
 import io.github.nexalloy.morphe.twitter.timeline.sensitivemediasettings.ShowSensitiveMedia
+import io.github.nexalloy.morphe.twitter.timeline.showpollresults.ShowPollResults
 
 
 val TwitterPatches: Array<Patch> = arrayOf(
@@ -33,5 +34,6 @@ val TwitterPatches: Array<Patch> = arrayOf(
     ForceHD,
     RemovePremiumUpsell,
     ShowSensitiveMedia,
+    ShowPollResults,
 
 )
