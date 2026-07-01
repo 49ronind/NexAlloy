@@ -120,8 +120,7 @@ val replayUpdateFingerprint = findMethodDirect {
     findMethod {
         matcher {
             usingStrings(
-                "Entry should exist before function call",
-                "Visual message is missing from thread entry"
+                "direct_v2/visual_threads/%s/item_replayed/"
             )
             returnType = "void"
         }
