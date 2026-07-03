@@ -1,30 +1,13 @@
 package io.github.nexalloy.revanced.threads.ads
 
 import io.github.nexalloy.morphe.findMethodDirect
+import io.github.nexalloy.morphe.fingerprint
 
-val adInjectorFingerprint = findMethodDirect {
+val adFetchSponsoredContentFingerprint = findMethodDirect {
     findMethod {
         matcher {
             returnType = "void"
-            usingStrings("SponsoredContentController.processValidatedContent")
-        }
-    }.single()
-}
-
-val adSponsoredContentFingerprint = findMethodDirect {
-    findMethod {
-        matcher {
-            returnType = "boolean"
-            usingStrings("SponsoredContentController.insertItem")
-        }
-    }.single()
-}
-
-val adInsertionActionFingerprint = findMethodDirect {
-    findMethod {
-        matcher {
-            returnType = "void"
-            usingStrings("SponsoredContentController.processInsertionAction")
+            usingStrings("onFetchSponsoredContent")
         }
     }.single()
 }
@@ -32,17 +15,7 @@ val adInsertionActionFingerprint = findMethodDirect {
 val adContentDeliveredFingerprint = findMethodDirect {
     findMethod {
         matcher {
-            returnType = "void"
-            usingStrings("SponsoredContentController.onSponsoredContentDelivered")
-        }
-    }.single()
-}
-
-val spoolAdInjectorFingerprint = findMethodDirect {
-    findMethod {
-        matcher {
-            returnType = "void"
-            usingStrings("injectAdToFeedSessionAtPosition")
+            usingStrings("onSponsoredContentDelivered")
         }
     }.single()
 }
@@ -50,7 +23,8 @@ val spoolAdInjectorFingerprint = findMethodDirect {
 val paidPartnershipLabelFingerprint = findMethodDirect {
     findMethod {
         matcher {
-            usingStrings("com.instagram.barcelona.feed.post.ui.PaidPartnershipLabel (PaidPartnershipLabel.kt:25)")
+            returnType = "void"
+            usingStrings("PaidPartnershipLabel (PaidPartnershipLabel.kt:25)")
         }
     }.single()
 }
@@ -58,7 +32,22 @@ val paidPartnershipLabelFingerprint = findMethodDirect {
 val adMetadataFingerprint = findMethodDirect {
     findMethod {
         matcher {
-            usingStrings("com.instagram.barcelona.sponsored.ui.AdMetadata (AdMetadata.kt:54)")
+            returnType = "void"
+            usingStrings("AdMetadata (AdMetadata.kt:54)")
         }
     }.single()
+}
+
+val sponsoredLabelInHeaderFingerprint = findMethodDirect {
+    findMethod {
+        matcher {
+            returnType = "void"
+            usingStrings("SponsoredLabelInHeader (SponsoredLabel.kt:12)")
+        }
+    }.single()
+}
+
+val spoolAdInjectorLambdaFingerprint = fingerprint {
+    definingClass("Lcom/instagram/barcelona/feed/data/cache/BarcelonaSpoolFeedCacheHandler\$injectAdToFeedSessionAtPosition\$1;")
+    name("invokeSuspend")
 }
