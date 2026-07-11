@@ -3,7 +3,7 @@ package io.github.nexalloy.morphe.youtube.misc.backgroundplayback
 import app.morphe.extension.youtube.patches.BackgroundPlaybackPatch
 import de.robv.android.xposed.XC_MethodReplacement.returnConstant
 import io.github.nexalloy.morphe.shared.misc.settings.preference.SwitchPreference
-import io.github.nexalloy.morphe.youtube.misc.litho.filter.featureFlagCheck
+import io.github.nexalloy.morphe.shared.misc.litho.filter.featureFlagCheck
 import io.github.nexalloy.morphe.youtube.misc.playservice.VersionCheck
 import io.github.nexalloy.morphe.youtube.misc.playservice.is_20_29_or_greater
 import io.github.nexalloy.morphe.youtube.misc.playservice.is_21_04_or_greater
@@ -19,7 +19,7 @@ val BackgroundPlayback = patch(
     dependsOn(VersionCheck)
 
     PreferenceScreen.SHORTS.addPreferences(
-        SwitchPreference("morphe_shorts_disable_background_playback", summaryKey = null),
+        SwitchPreference("morphe_shorts_disable_background_playback"),
     )
 
     BackgroundPlaybackManagerFingerprint.hookMethod {

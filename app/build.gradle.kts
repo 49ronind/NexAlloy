@@ -133,7 +133,7 @@ dependencies {
 //    implementation(libs.dexkit)
 
     // DexKit fork with instruction operand introspection
-    // https://github.com/NexAlloy/DexKit/commit/3aa79f2bca6c7968f66684535dac816f0a4f085b
+    // https://github.com/NexAlloy/DexKit/commit/046c0484b37e6a2100dd7bcc16748132c45dd2d9
     implementation(":dexkit-android@aar")
     implementation("com.google.flatbuffers:flatbuffers-java:23.5.26") // dexkit dependency
     implementation(libs.annotation)
@@ -150,6 +150,8 @@ dependencies {
     compileOnly(project(":stub"))
     implementation(libs.androidx.javascriptengine)
     implementation(libs.protobuf.javalite)
+    implementation(libs.collections4)
+    implementation(libs.lang3)
 }
 
 protobuf {
@@ -225,7 +227,7 @@ abstract class GenerateStringsTask @Inject constructor(
     }
 
     // Subdirectories within each variant that contain resource files.
-    private val subDirs = listOf("shared", "shared-youtube", "youtube", "music", "reddit")
+    private val subDirs = listOf("shared", "shared-youtube", "youtube", "music", "reddit", "sponsorblock")
 
     @TaskAction
     fun action() {
@@ -276,7 +278,7 @@ abstract class CopyResourcesTask @Inject constructor() : DefaultTask() {
             "sponsorblock/drawable" to null,
             "sponsorblock/layout" to listOf("morphe_sb_skip_sponsor_button.xml"),
             "swipecontrols/drawable" to null,
-            "copyvideourlbutton/drawable" to null,
+            "copyvideolinkbutton/drawable" to null,
             "downloads/drawable" to null,
             "speedbutton/drawable" to null,
             "navigationbuttons/drawable" to null,

@@ -1,6 +1,7 @@
-package io.github.nexalloy.morphe.youtube.ad.general
+package io.github.nexalloy.morphe.youtube.ad
 
 import android.view.View
+import app.morphe.extension.music.patches.HideAdsPatch
 import app.morphe.extension.shared.Logger
 import app.morphe.extension.shared.ResourceUtils
 import app.morphe.extension.youtube.patches.components.AdsFilter
@@ -12,14 +13,14 @@ import io.github.nexalloy.morphe.youtube.layout.hide.general.HideHorizontalShelv
 import io.github.nexalloy.morphe.youtube.misc.engagement.EngagementPanelHook
 import io.github.nexalloy.morphe.youtube.misc.engagement.addEngagementPanelIdHook
 import io.github.nexalloy.morphe.youtube.misc.litho.filter.LithoFilter
-import io.github.nexalloy.morphe.youtube.misc.litho.filter.addLithoFilter
+import io.github.nexalloy.morphe.shared.misc.litho.filter.addLithoFilter
 import io.github.nexalloy.morphe.youtube.misc.playservice.VersionCheck
 import io.github.nexalloy.morphe.youtube.misc.settings.PreferenceScreen
 import io.github.nexalloy.patch
 
 val HideAds = patch(
     name = "Hide ads",
-    description = "Adds options to remove general ads.",
+    description = "Adds options to hide general ads, Premium promotions and video ads.",
 ) {
     dependsOn(
         LithoFilter,
@@ -31,19 +32,34 @@ val HideAds = patch(
     )
 
     PreferenceScreen.ADS.addPreferences(
-        SwitchPreference("morphe_hide_creator_store_shelf", summaryKey = null),
-//        SwitchPreference("morphe_hide_end_screen_store_banner", summaryKey = null),
-        SwitchPreference("morphe_hide_general_ads", summaryKey = null),
-        SwitchPreference("morphe_hide_merchandise_banners", summaryKey = null),
-        SwitchPreference("morphe_hide_paid_promotion_label", summaryKey = null),
-        SwitchPreference("morphe_hide_player_popup_ads", summaryKey = null),
-        SwitchPreference("morphe_hide_self_sponsor_ads", summaryKey = null),
-        SwitchPreference("morphe_hide_shopping_links", summaryKey = null),
-        SwitchPreference("morphe_hide_youtube_premium_promotions", summaryKey = null),
+        SwitchPreference("morphe_hide_creator_store_shelf"),
+//        SwitchPreference("morphe_hide_end_screen_store_banner"),
+        SwitchPreference("morphe_hide_general_ads"),
+        SwitchPreference("morphe_hide_merchandise_banners"),
+        SwitchPreference("morphe_hide_paid_promotion_label"),
+        SwitchPreference("morphe_hide_player_popup_ads"),
+        SwitchPreference("morphe_hide_self_sponsor_ads"),
+        SwitchPreference("morphe_hide_shopping_links"),
+        SwitchPreference("morphe_hide_video_ads"),
+        SwitchPreference("morphe_hide_youtube_premium_promotions"),
     )
 
     addLithoFilter(AdsFilter())
     addEngagementPanelIdHook(AdsFilter::hidePlayerPopupAds)
+
+    // Hide video ads
+
+    setOf(
+        LoadVideoAdsFingerprint,
+        PlayerBytesAdLayoutFingerprint,
+    ).forEach { fingerprint ->
+        fingerprint.hookMethod {
+            before {
+                if(AdsFilter.hideVideoAds())
+                    it.result = null
+            }
+        }
+    }
 
     // TODO: Hide YouTube Premium promotions
 
@@ -61,6 +77,7 @@ val HideAds = patch(
 
     // Hide player overlay view. This can be hidden with a regular litho filter
     // but an empty space remains.
+
     PlayerOverlayTimelyShelfFingerprint.hookMethod {
         val playerOverlayEventClass = ::PlayerOverlayEventType.clazz
         val playerOverlayIdField = ::PlayerOverlayIdField.field
@@ -92,7 +109,12 @@ val HideAds = patch(
             }
         })
 
+    // TODO Hide paid promotion label in miniplayer
+
     /**
      * TODO [AdsFilter.hideAds] OsNameHook
+     */
+    /**
+     * TODO [AdsFilter.hideVideoAds] OsNameHook
      */
 }
