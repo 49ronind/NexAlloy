@@ -1787,30 +1787,15 @@ private fun hideLikelyFeedReelCtaAdContainer(view: View, reason: String): Boolea
     return hidden
 }
 
-/** Walks up from [view] while the parent still looks like a single post container
- *  (≥82% root width, height bounded relative to root and to the child) — used by
- *  the native-ad / game-ad fallback path where we don't have explicit text markers. */
-private fun resolveLikelyAdContainerTarget(view: View): View {
-    val root = view.rootView ?: return view
-    var current = view
-    var selected = view
-    val rootWidth  = root.width.takeIf { it > 0 } ?: 0
-    val rootHeight = root.height.takeIf { it > 0 } ?: 0
-    while (true) {
-        val parentView = current.parent as? View ?: break
-        if (parentView.javaClass.name.contains("RecyclerView")) break
-        val parentWidth  = parentView.width
-        val parentHeight = parentView.height
-        val looksLikePostContainer = rootWidth > 0 && rootHeight > 0 &&
-            parentWidth >= (rootWidth * 0.82f).toInt() &&
-            parentHeight > 0 && parentHeight < (rootHeight * 0.72f).toInt()
-        if (!looksLikePostContainer) break
-        val currentHeight = current.height.takeIf { it > 0 } ?: parentHeight
-        if (currentHeight > 0 && parentHeight > maxOf((currentHeight * 1.25f).toInt(), currentHeight + 180)) break
-        selected = parentView; current = parentView
-    }
-    return selected
-}
+/** DISABLED: this used to walk up the parent chain purely by geometry (width/height
+ *  ratios vs root) to guess a "post container" to collapse. That amplified any single
+ *  false-positive match (e.g. a mistakenly-matched text/description deep in a profile
+ *  header) into hiding a whole nearby block, because the walk never checked that the
+ *  ancestors actually contained more ad-like content — only that their size looked
+ *  roughly right. Restored to the old, narrower behavior: hide exactly the view that
+ *  matched, nothing more. Re-enable only with a content-based (not size-based) check
+ *  if the narrower behavior turns out to be insufficient. */
+private fun resolveLikelyAdContainerTarget(view: View): View = view
 
 private fun shouldUseFeedMarkerCardTarget(view: View): Boolean =
     isPotentialFeedAdMarkerView(view) || (view is TextView && isFeedAdMarkerText(view.text))
@@ -1822,41 +1807,18 @@ private data class ExplicitFeedAdCardSignals(
     val hasHideAd: Boolean, val hasAdLabel: Boolean, val hasSharedLink: Boolean, val hasStrongCta: Boolean
 )
 
-/** Walks UP from a marker view to find the full post card that should be collapsed —
- *  picks the largest matching ancestor rather than the first one found. */
-private fun resolveLikelyExplicitFeedAdCardTarget(view: View): View? {
-    val root = view.rootView ?: return null
-    val rootWidth  = root.width.takeIf  { it > 0 } ?: return null
-    val rootHeight = root.height.takeIf { it > 0 } ?: return null
-    var current: View? = view
-    var best: View? = null
-    var bestHeight = -1
-    while (current != null) {
-        if (isLikelyExplicitFeedAdCardContainer(current, rootWidth, rootHeight)) {
-            val h = current.height
-            if (h > bestHeight) { best = current; bestHeight = h }
-        }
-        current = current.parent as? View ?: break
-    }
-    return best
-}
+/** DISABLED: previously walked UP from the marker view to find the "full post card"
+ *  ancestor to collapse (picking the largest matching ancestor). Reverted to hiding
+ *  exactly the matched view — same reasoning as resolveLikelyAdContainerTarget above:
+ *  climbing ancestors by geometry/signal-scan can grab an unrelated nearby block
+ *  (e.g. a profile header) instead of the actual ad, and that mismatch is what caused
+ *  text to disappear. Re-enable only with a stricter, content-verified walk if needed. */
+private fun resolveLikelyExplicitFeedAdCardTarget(view: View): View? = view
 
-private fun resolveLikelyFeedMarkerCardTarget(view: View): View? {
-    val root = view.rootView ?: return null
-    val rootWidth  = root.width.takeIf  { it > 0 } ?: return null
-    val rootHeight = root.height.takeIf { it > 0 } ?: return null
-    var current: View? = view
-    var best: View? = null
-    var bestHeight = -1
-    while (current != null) {
-        if (isSafeFeedMarkerCardCandidate(current, rootWidth, rootHeight)) {
-            val h = current.height
-            if (h > bestHeight) { best = current; bestHeight = h }
-        }
-        current = current.parent as? View ?: break
-    }
-    return best
-}
+/** DISABLED: see resolveLikelyExplicitFeedAdCardTarget above — same reasoning applies.
+ *  This one was purely geometry-based (isSafeFeedMarkerCardCandidate never checked
+ *  actual ad content on the ancestor), making it the least safe of the three walks. */
+private fun resolveLikelyFeedMarkerCardTarget(view: View): View? = view
 
 /** Bounding-box safety check to avoid the broad feed-marker fallback collapsing
  *  something that isn't a full post card (e.g. a toolbar or a comment row). */
@@ -1917,17 +1879,10 @@ private fun collectExplicitFeedAdCardSignals(root: View): ExplicitFeedAdCardSign
     return ExplicitFeedAdCardSignals(hasHideAd, hasAdLabel, hasSharedLink, hasStrongCta)
 }
 
-private fun resolveLikelyFeedReelCtaAdContainerTarget(view: View): View? {
-    val root = view.rootView ?: return null
-    val rootWidth  = root.width.takeIf  { it > 0 } ?: return null
-    val rootHeight = root.height.takeIf { it > 0 } ?: return null
-    var current: View? = view
-    while (current != null) {
-        if (isLikelyFeedReelCtaAdContainer(current, rootWidth, rootHeight)) return current
-        current = current.parent as? View ?: break
-    }
-    return null
-}
+/** DISABLED: same reasoning as resolveLikelyExplicitFeedAdCardTarget above — this
+ *  walked up looking for the reel-CTA-shaped ancestor by geometry + signal-scan.
+ *  Reverted to hiding exactly the matched view. */
+private fun resolveLikelyFeedReelCtaAdContainerTarget(view: View): View? = view
 
 private data class FeedReelCtaAdSignals(
     val hasSharedLink: Boolean, val hasSendMessageCta: Boolean,
