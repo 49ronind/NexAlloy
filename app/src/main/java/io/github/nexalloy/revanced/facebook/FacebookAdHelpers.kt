@@ -1961,13 +1961,25 @@ private fun isAnyAdMarkerText(value: CharSequence?): Boolean =
 private fun isFeedAdMarkerText(value: CharSequence?): Boolean {
     if (value.isNullOrBlank()) return false
     val normalized = value.toString().lowercase()
-    return FEED_SURFACE_AD_MARKER_TOKENS.any { token -> normalized.contains(token) }
+    return FEED_SURFACE_AD_MARKER_TOKENS.any { token ->
+        if (token == "ad\u2022") AD_BULLET_MARKER_REGEX.containsMatchIn(normalized)
+        else normalized.contains(token)
+    }
 }
+
+// "ad\u2022" needs a word boundary before "ad" — otherwise it also matches any text
+// that merely ends in the letters "ad" right before a bullet (e.g. a Vietnamese
+// number/label string that happens to end that way), which was hiding real profile
+// header content that had nothing to do with an actual ad label.
+private val AD_BULLET_MARKER_REGEX = Regex("(?:^|[^\\p{L}\\p{N}])ad\\u2022")
 
 private fun isExplicitFeedAdMarkerText(value: CharSequence?): Boolean {
     if (value.isNullOrBlank()) return false
     val normalized = value.toString().lowercase()
-    return EXPLICIT_FEED_CARD_AD_MARKER_TOKENS.any { token -> normalized.contains(token) }
+    return EXPLICIT_FEED_CARD_AD_MARKER_TOKENS.any { token ->
+        if (token == "ad\u2022") AD_BULLET_MARKER_REGEX.containsMatchIn(normalized)
+        else normalized.contains(token)
+    }
 }
 
 private fun isExplicitFeedAdCtaText(value: CharSequence?): Boolean {
