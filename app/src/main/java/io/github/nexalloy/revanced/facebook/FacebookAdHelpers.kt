@@ -71,30 +71,8 @@ val AUDIENCE_NETWORK_REWARD_COMPLETION_METHOD_NAMES = setOf(
 
 val AUDIENCE_NETWORK_CLOSE_LISTENER_CLASS_NAMES = setOf("X.mGv", "X.mGo", "p000X.mGv", "p000X.mGo")
 
-val FEED_AD_CATEGORY_VALUES          = setOf("SPONSORED", "PROMOTION", "AD", "ADVERTISEMENT", "BANNER", "ENGAGEMENT_QP")
+val FEED_AD_CATEGORY_VALUES          = setOf("SPONSORED", "PROMOTION", "AD", "ADVERTISEMENT", "BANNER")
 val FEED_SAFE_CONTAINER_CATEGORY_VALUES = setOf("FB_SHORTS", "MULTI_FB_STORIES_TRAY")
-
-// Upstream gate: the BROAD feed/reel-CTA text-marker fallbacks below are disabled by
-// default in FacebookAppAdsRemover (higher false-positive risk than the explicit-card
-// detector). The explicit "Hide ad" + AdChoices card detector always stays on.
-const val ENABLE_FEED_UI_MARKER_FALLBACKS = false
-
-val FEED_SURFACE_AD_MARKER_TOKENS = listOf(
-    "hide ad", "ad\u2022", "sponsored", "promoted", "ad choices", "adchoices"
-)
-
-val EXPLICIT_FEED_CARD_AD_MARKER_TOKENS = listOf(
-    "hide ad", "ad\u2022", "ad choices", "adchoices"
-)
-
-val EXPLICIT_FEED_AD_CTA_TOKENS = listOf(
-    "apply now", "send message", "learn more", "shop now", "contact us",
-    "get quote", "book now", "call now", "sign up", "download"
-)
-
-val FEED_REEL_CTA_AD_MARKER_TOKENS = listOf(
-    "shared link:", "send message", "your business", "your ad"
-)
 
 val FEED_AD_SIGNAL_TOKENS = listOf(
     "sponsored", "promotion", "multiads", "quickpromotion",
@@ -141,7 +119,6 @@ private val marketplaceAdsPackCache      = ConcurrentHashMap<String, Boolean>()
 // ─── Data classes ─────────────────────────────────────────────────────────────
 
 data class FeedListSanitizerHook(val method: Method, val listArgIndex: Int)
-data class FeedCsrFilterHook(val method: Method, val listArgIndex: Int)
 
 data class StoryAdProviderHooks(
     val providerClass: Class<*>,
@@ -244,107 +221,42 @@ class AdStoryInspector(private val adKindEnumClass: Class<*>) {
 // ─── FeedItemInspector ────────────────────────────────────────────────────────
 
 class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
-    private val itemModelAccessor =
-        resolveItemContractAccessor(itemContractTypes, "B2r") ?: resolveItemModelAccessor(itemContractTypes)
-    private val itemEdgeAccessor =
-        resolveItemContractAccessor(itemContractTypes, "BG7") ?: resolveItemEdgeAccessor(itemContractTypes)
-    private val itemNetworkAccessor =
-        resolveItemContractAccessor(itemContractTypes, "ArH") ?: resolveItemNetworkAccessor(itemContractTypes)
-    private val categoryMethodCache       = ConcurrentHashMap<Class<*>, Method>()
-    private val edgeAccessorCache         = ConcurrentHashMap<Class<*>, Method>()
-    private val edgeCategoryAccessorCache = ConcurrentHashMap<Class<*>, Method>()
-    private val feedUnitAccessorCache     = ConcurrentHashMap<Class<*>, Method>()
-    private val backendDataAccessorCache  = ConcurrentHashMap<Class<*>, Method>()
-    private val typeNameMethodCache       = ConcurrentHashMap<Class<*>, Method>()
-    private val stringAccessorCache       = ConcurrentHashMap<Class<*>, List<Method>>()
-    private val stringFieldCache          = ConcurrentHashMap<Class<*>, List<Field>>()
-
-    private data class FeedItemFacts(
-        val modelCategory: String?,
-        val edgeCategory: String?,
-        val network: Boolean?,
-        val inflatedUnitClass: String?,
-        val inflatedTypeName: String?,
-        val backendUnitClass: String?,
-        val backendTypeName: String?
-    )
+    private val itemModelAccessor    = resolveItemModelAccessor(itemContractTypes)
+    private val itemEdgeAccessor     = resolveItemEdgeAccessor(itemContractTypes)
+    private val itemNetworkAccessor  = resolveItemNetworkAccessor(itemContractTypes)
+    private val categoryMethodCache  = ConcurrentHashMap<Class<*>, Method>()
+    private val edgeAccessorCache    = ConcurrentHashMap<Class<*>, Method>()
+    private val feedUnitAccessorCache = ConcurrentHashMap<Class<*>, Method>()
+    private val typeNameMethodCache  = ConcurrentHashMap<Class<*>, Method>()
+    private val stringAccessorCache  = ConcurrentHashMap<Class<*>, List<Method>>()
+    private val stringFieldCache     = ConcurrentHashMap<Class<*>, List<Field>>()
 
     fun isSponsoredFeedItem(value: Any?): Boolean {
         if (isDefinitelySponsoredFeedItem(value)) return true
-        val model       = invokeNoThrow(itemModelAccessor, value)
-        val edge        = edgeFrom(value)
-        val feedUnit    = feedUnitFrom(edge)
-        val backendData = backendDataFrom(edge)
-        if (containsKnownAdSignals(value))       return true
-        if (containsKnownAdSignals(model))       return true
-        if (containsKnownAdSignals(edge))        return true
-        if (containsKnownAdSignals(feedUnit))    return true
-        if (containsKnownAdSignals(backendData)) return true
-        return false
+        val model = invokeNoThrow(itemModelAccessor, value); val edge = edgeFrom(value); val feedUnit = feedUnitFrom(edge)
+        return containsKnownAdSignals(value) || containsKnownAdSignals(model) || containsKnownAdSignals(edge) || containsKnownAdSignals(feedUnit)
     }
 
     fun isDefinitelySponsoredFeedItem(value: Any?): Boolean {
         if (value == null) return false
-        val model         = invokeNoThrow(itemModelAccessor, value)
-        val modelCategory = readCategory(model)
+        val model = invokeNoThrow(itemModelAccessor, value); val modelCategory = readCategory(model)
         if (isSafeFeedContainerCategory(modelCategory)) return false
-        if (isSponsoredFeedCategory(modelCategory))     return true
-
-        val edge         = edgeFrom(value)
-        val edgeCategory = readEdgeCategory(edge) ?: readCategory(edge)
+        if (isSponsoredFeedCategory(modelCategory)) return true
+        val edge = edgeFrom(value); val edgeCategory = readCategory(edge)
         if (isSafeFeedContainerCategory(edgeCategory)) return false
-        if (isSponsoredFeedCategory(edgeCategory))     return true
-
-        val feedUnit               = feedUnitFrom(edge)
-        val backendData            = backendDataFrom(edge)
-        val inflatedUnitClassName  = feedUnit?.javaClass?.name
-        val backendUnitClassName   = backendData?.javaClass?.name
-        if (inflatedUnitClassName == GRAPHQL_MULTI_ADS_FEED_UNIT_CLASS ||
-            inflatedUnitClassName == GRAPHQL_QUICK_PROMO_FEED_UNIT_CLASS) return true
-
-        val typeName = readTypeName(feedUnit) ?: readTypeName(backendData)
-        if (isLikelyAdTypeName(typeName) ||
-            isAdSignalText(inflatedUnitClassName) ||
-            isAdSignalText(backendUnitClassName)) return true
-
-        return false
+        if (isSponsoredFeedCategory(edgeCategory)) return true
+        val feedUnit = feedUnitFrom(edge); val unitClassName = feedUnit?.javaClass?.name
+        if (unitClassName == GRAPHQL_MULTI_ADS_FEED_UNIT_CLASS || unitClassName == GRAPHQL_QUICK_PROMO_FEED_UNIT_CLASS) return true
+        val typeName = readTypeName(feedUnit)
+        return isLikelyAdTypeName(typeName) || isAdSignalText(unitClassName)
     }
-
-    /** Kept as a separate hook from [isDefinitelySponsoredFeedItem] so the strict-block
-     *  reason can later be differentiated (e.g. "strict" vs. a broader network-based
-     *  reason) without changing [hookStoryPoolAdd]'s call site. */
-    fun storyPoolBlockReason(value: Any?): String? =
-        if (isDefinitelySponsoredFeedItem(value)) "strict" else null
 
     fun describe(item: Any?): String {
         if (item == null) return "null"
-        val facts = factsFor(item)
-        val modelCategory     = facts.modelCategory ?: "unknown"
-        val edgeCategory      = facts.edgeCategory ?: "unknown"
-        val network           = facts.network?.toString() ?: "unknown"
-        val inflatedUnitClass = facts.inflatedUnitClass ?: "null"
-        val inflatedTypeName  = facts.inflatedTypeName ?: "unknown"
-        val backendUnitClass  = facts.backendUnitClass ?: "null"
-        val backendTypeName   = facts.backendTypeName ?: "unknown"
-        return "modelCat=$modelCategory edgeCat=$edgeCategory isAd=${isSponsoredFeedItem(item)} " +
-            "network=$network wrapper=${item.javaClass.name} " +
-            "inflated=$inflatedUnitClass/$inflatedTypeName backend=$backendUnitClass/$backendTypeName"
-    }
-
-    private fun factsFor(item: Any?): FeedItemFacts {
-        val model       = invokeNoThrow(itemModelAccessor, item)
-        val edge        = edgeFrom(item)
-        val feedUnit    = feedUnitFrom(edge)
-        val backendData = backendDataFrom(edge)
-        return FeedItemFacts(
-            modelCategory     = readCategory(model),
-            edgeCategory      = readEdgeCategory(edge) ?: readCategory(edge),
-            network           = invokeNoThrow(itemNetworkAccessor, item) as? Boolean,
-            inflatedUnitClass = feedUnit?.javaClass?.name,
-            inflatedTypeName  = readTypeName(feedUnit),
-            backendUnitClass  = backendData?.javaClass?.name,
-            backendTypeName   = readTypeName(backendData)
-        )
+        val edge = edgeFrom(item); val feedUnit = feedUnitFrom(edge)
+        val category = readCategory(invokeNoThrow(itemModelAccessor, item)) ?: readCategory(edge) ?: "unknown"
+        val network = invokeNoThrow(itemNetworkAccessor, item)?.toString() ?: "unknown"
+        return "cat=$category isAd=${isSponsoredFeedItem(item)} network=$network wrapper=${item.javaClass.name} unit=${feedUnit?.javaClass?.name ?: "null"} type=${readTypeName(feedUnit) ?: "unknown"}"
     }
 
     private fun edgeFrom(value: Any?): Any? {
@@ -357,66 +269,17 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
         return invokeNoThrow(fallback, value)
     }
 
-    /** Tries the known obfuscated accessor names first ("BL9"/"A03"); falls back to the
-     *  generic child-accessor heuristic, now also excluding "FeedBackendData" (the
-     *  sibling node added by [backendDataFrom]) so the two never resolve to each other. */
     private fun feedUnitFrom(edge: Any?): Any? {
         if (edge == null) return null
         val accessor = cachedMethod(feedUnitAccessorCache, edge.javaClass) {
-            resolveNamedNoArgAccessor(edge.javaClass, "BL9")
-                ?: resolveNamedNoArgAccessor(edge.javaClass, "A03")
-                ?: resolveChildAccessor(edge) { v ->
-                    val cn = v?.javaClass?.name
-                    cn == GRAPHQL_MULTI_ADS_FEED_UNIT_CLASS || cn == GRAPHQL_QUICK_PROMO_FEED_UNIT_CLASS ||
-                    readTypeName(v)?.let { it != "FeedUnitEdge" && it != "FeedBackendData" } == true
-                }
+            resolveChildAccessor(edge) { v ->
+                val cn = v?.javaClass?.name
+                cn == GRAPHQL_MULTI_ADS_FEED_UNIT_CLASS || cn == GRAPHQL_QUICK_PROMO_FEED_UNIT_CLASS ||
+                readTypeName(v)?.let { it != "FeedUnitEdge" } == true
+            }
         }
         return invokeNoThrow(accessor, edge)
     }
-
-    /** "FeedBackendData" is a sibling of the inflated feed unit on the same edge — a
-     *  second, independent data path that can also carry ad signals (this is the
-     *  upstream fix for ads that don't show up via the normal inflated feedUnit). */
-    private fun backendDataFrom(edge: Any?): Any? {
-        if (edge == null) return null
-        val accessor = cachedMethod(backendDataAccessorCache, edge.javaClass) {
-            resolveNamedNoArgAccessor(edge.javaClass, "BL0")
-                ?: resolveNamedNoArgAccessor(edge.javaClass, "A05")
-                ?: resolveChildAccessor(edge) { v -> readTypeName(v) == "FeedBackendData" }
-        }
-        return invokeNoThrow(accessor, edge)
-    }
-
-    private fun readEdgeCategory(value: Any?): String? {
-        if (value == null) return null
-        val accessor = cachedMethod(edgeCategoryAccessorCache, value.javaClass) {
-            resolveNamedNoArgAccessor(value.javaClass, "B4k")
-                ?: allInstanceMethods(value.javaClass).firstOrNull { m ->
-                    m.parameterCount == 0 && m.returnType.isEnum &&
-                    m.returnType.enumConstants?.any { val n = it.toString(); n == "SPONSORED" || n == "PROMOTION" } == true
-                }?.apply { isAccessible = true }
-        }
-        return invokeNoThrow(accessor, value)?.toString()
-    }
-
-    /** Looks for an exact-named accessor on the item-contract interfaces first
-     *  (the obfuscated name is stable across most Facebook builds for a given
-     *  feed-item contract), before falling back to the generic shape-based search. */
-    private fun resolveItemContractAccessor(itemContractTypes: Collection<Class<*>>, methodName: String): Method? =
-        itemContractTypes.asSequence()
-            .flatMap { allInstanceMethods(it).asSequence() }
-            .firstOrNull { m -> m.parameterCount == 0 && m.name == methodName }
-            ?.apply { isAccessible = true }
-
-    private fun resolveNamedNoArgAccessor(type: Class<*>, methodName: String): Method? =
-        allInstanceMethods(type).firstOrNull { m -> m.parameterCount == 0 && m.name == methodName }
-            ?.apply { isAccessible = true }
-
-    fun describeAccessors(): String =
-        "model=${accessorName(itemModelAccessor)} edge=${accessorName(itemEdgeAccessor)} network=${accessorName(itemNetworkAccessor)}"
-
-    private fun accessorName(method: Method?): String =
-        method?.let { "${it.declaringClass.name}.${it.name}" } ?: "unresolved"
 
     private fun readCategory(value: Any?): String? {
         if (value == null) return null
@@ -433,10 +296,9 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
     private fun readTypeName(value: Any?): String? {
         if (value == null) return null
         val accessor = cachedMethod(typeNameMethodCache, value.javaClass) {
-            resolveNamedNoArgAccessor(value.javaClass, "getTypeName")
-                ?: allInstanceMethods(value.javaClass).firstOrNull { m ->
-                    m.parameterCount == 0 && m.returnType == String::class.java && m.name == "getTypeName"
-                }?.apply { isAccessible = true }
+            allInstanceMethods(value.javaClass).firstOrNull { m ->
+                m.parameterCount == 0 && m.returnType == String::class.java && m.name == "getTypeName"
+            }?.apply { isAccessible = true }
         }
         return invokeNoThrow(accessor, value) as? String
     }
@@ -446,22 +308,14 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
         return cache.putIfAbsent(type, resolved) ?: resolved
     }
 
-    // Excludes "A02"/"BG7" in addition to "clone" — those are the named edge/other
-    // accessors that could otherwise be mistakenly picked up by this generic search.
     private fun resolveItemModelAccessor(types: Collection<Class<*>>) = types.asSequence()
         .flatMap { allInstanceMethods(it).asSequence() }
-        .firstOrNull { m ->
-            m.parameterCount == 0 && m.name != "clone" && m.name != "A02" && m.name != "BG7" &&
-            !m.returnType.isPrimitive && m.returnType != Any::class.java && m.returnType != String::class.java && !m.returnType.isEnum
-        }
+        .firstOrNull { m -> m.parameterCount == 0 && !m.returnType.isPrimitive && m.returnType != Any::class.java && m.returnType != String::class.java && !m.returnType.isEnum }
         ?.apply { isAccessible = true }
 
     private fun resolveItemEdgeAccessor(types: Collection<Class<*>>) = types.asSequence()
         .flatMap { allInstanceMethods(it).asSequence() }
-        .firstOrNull { m ->
-            m.parameterCount == 0 && m.name != "clone" &&
-            (m.returnType == Any::class.java || m.returnType.name == GRAPHQL_FEED_UNIT_EDGE_CLASS)
-        }
+        .firstOrNull { m -> m.parameterCount == 0 && (m.returnType == Any::class.java || m.returnType.name == GRAPHQL_FEED_UNIT_EDGE_CLASS) }
         ?.apply { isAccessible = true }
 
     private fun resolveItemNetworkAccessor(types: Collection<Class<*>>) = types.asSequence()
@@ -541,17 +395,13 @@ fun logHookHitThrottled(hookName: String, method: Method, detail: String? = null
 // ─── Hook installers – Reels / list-builder ───────────────────────────────────
 
 fun hookListBuilderAppend(method: Method, inspector: AdStoryInspector) {
-    val listArgIndex = method.listParameterIndexes().singleOrNull()
-    if (listArgIndex == null) {
-        return
-    }
     XposedBridge.hookMethod(method, object : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) {
-            param.setObjectExtra(BEFORE_SIZE_EXTRA, (param.args.getOrNull(listArgIndex) as? List<*>)?.size ?: -1)
+            param.setObjectExtra(BEFORE_SIZE_EXTRA, (param.args.getOrNull(5) as? List<*>)?.size ?: -1)
         }
         override fun afterHookedMethod(param: MethodHookParam) {
             val beforeSize = param.getObjectExtra(BEFORE_SIZE_EXTRA) as? Int ?: return
-            val list = param.args.getOrNull(listArgIndex) as? MutableList<Any?> ?: return
+            val list = param.args.getOrNull(5) as? MutableList<Any?> ?: return
             if (beforeSize < 0 || beforeSize > list.size) return
             var removed = 0
             for (i in list.lastIndex downTo beforeSize) { if (inspector.containsAdStory(list[i])) { list.removeAt(i); removed++ } }
@@ -599,25 +449,19 @@ private fun isMarketplaceAdsPluginPack(instance: Any): Boolean {
 
 // ─── Hook installers – Feed CSR / late-list ───────────────────────────────────
 
-fun hookFeedCsrFilterInput(hook: FeedCsrFilterHook, inspector: FeedItemInspector) {
-    XposedBridge.hookMethod(hook.method, object : XC_MethodHook() {
+fun hookFeedCsrFilterInput(method: Method, inspector: FeedItemInspector) {
+    XposedBridge.hookMethod(method, object : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) {
-            val originalList = param.args.getOrNull(hook.listArgIndex) as? Iterable<*> ?: return
+            val originalList = param.args.getOrNull(1) as? Iterable<*> ?: return
             val kept = ArrayList<Any?>(); var removed = 0
-            // Strict check on the way IN: Facebook's own pipeline hasn't finished
-            // resolving every item yet here, so the broader heuristic risks false
-            // positives — only drop items we're certain are ads.
-            for (item in originalList) { if (inspector.isDefinitelySponsoredFeedItem(item)) removed++ else kept.add(item) }
+            for (item in originalList) { if (inspector.isSponsoredFeedItem(item)) removed++ else kept.add(item) }
             if (removed <= 0) return
-            buildImmutableListLike(param.args.getOrNull(hook.listArgIndex), kept)?.let { param.args[hook.listArgIndex] = it }
+            buildImmutableListLike(param.args.getOrNull(1), kept)?.let { param.args[1] = it }
         }
         override fun afterHookedMethod(param: MethodHookParam) {
             val resultItems = extractFeedItemsFromResult(param.result) ?: return
             val kept = ArrayList<Any?>(); var removed = 0
-            // Broader check on the way OUT: the pipeline has now resolved everything,
-            // so the wider heuristic is safe to apply here.
             for (item in resultItems) { if (inspector.isSponsoredFeedItem(item)) removed++ else kept.add(item) }
-            if (removed > 0) replaceFeedItemsInResult(param, kept)
         }
     })
 }
@@ -640,8 +484,7 @@ fun hookStoryPoolAdd(method: Method, inspector: FeedItemInspector) {
     XposedBridge.hookMethod(method, object : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) {
             val item = param.args.getOrNull(0)
-            val blockReason = inspector.storyPoolBlockReason(item)
-            if (blockReason == null) {
+            if (!inspector.isDefinitelySponsoredFeedItem(item)) {
                 // Broad check: log but allow (same as upstream)
                 if (inspector.isSponsoredFeedItem(item)) {
                     logHookHitThrottled("storyPoolBroadAllowed", method, inspector.describe(item))
@@ -649,10 +492,7 @@ fun hookStoryPoolAdd(method: Method, inspector: FeedItemInspector) {
                 return
             }
             param.result = false
-            logHookHitThrottled(
-                if (blockReason == "strict") "storyPoolStrictBlock" else "storyPoolBroadNetworkBlock",
-                method, inspector.describe(item)
-            )
+            logHookHitThrottled("storyPoolStrictBlock", method, inspector.describe(item))
         }
     })
 }
@@ -709,120 +549,6 @@ fun hookSponsoredPoolResultMethods(poolClass: Class<*>) {
         hooked++
     }
 }
-
-/** Blocks any list/collection-returning getter on the sponsored story manager class
- *  whose params are limited to int/long/boolean (paging/cursor style accessors) —
- *  these back the "next sponsored story" vending path alongside the single-item
- *  [hookSponsoredStoryNext] hook. */
-fun hookSponsoredStoryListMethods(managerClass: Class<*>) {
-    var hooked = 0
-    managerClass.declaredMethods.filter { m -> !Modifier.isStatic(m.modifiers) && isSponsoredStoryListMethod(m) }.forEach { m ->
-        m.isAccessible = true
-        XposedBridge.hookMethod(m, object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam) {
-                buildEmptyListReturn(m.returnType)?.let { param.result = it }
-            }
-        })
-        hooked++
-    }
-}
-
-private fun isSponsoredStoryListMethod(method: Method): Boolean {
-    if (method.parameterCount > 2) return false
-    if (!Iterable::class.java.isAssignableFrom(method.returnType) &&
-        method.returnType.name != "com.google.common.collect.ImmutableList") {
-        return false
-    }
-    return method.parameterTypes.all { type ->
-        type == Int::class.javaPrimitiveType || type == Long::class.javaPrimitiveType || type == Boolean::class.javaPrimitiveType
-    }
-}
-
-private fun buildEmptyListReturn(returnType: Class<*>): Any? {
-    if (returnType.name == "com.google.common.collect.ImmutableList") {
-        return runCatching {
-            val of = returnType.getDeclaredMethod("of")
-            of.isAccessible = true
-            of.invoke(null)
-        }.getOrNull()
-    }
-    return when {
-        returnType.isAssignableFrom(ArrayList::class.java) -> arrayListOf<Any?>()
-        Iterable::class.java.isAssignableFrom(returnType) -> emptyList<Any?>()
-        else -> null
-    }
-}
-
-// ─── List builder method resolution (flexible, score-based) ──────────────────
-//
-// Facebook occasionally ships a list-builder variant with a different parameter
-// count/order than the structural 6-param shape we search for at the DexKit level
-// (see listBuilderClassFingerprint). Once the CLASS is resolved — which IS cached
-// via DexKit — we pick the append/factory method by scoring every candidate method
-// on that class via plain reflection, instead of requiring an exact param shape.
-// This mirrors upstream FacebookAppAdsRemover's resolveAppendMethod/resolveFactoryMethod.
-
-private fun Method.listParameterIndexes(): List<Int> =
-    parameterTypes.mapIndexedNotNull { index, type -> index.takeIf { List::class.java.isAssignableFrom(type) } }
-
-private fun resolveListBuilderMethods(clazz: Class<*>): List<Method> {
-    val methods = LinkedHashMap<String, Method>()
-    (clazz.declaredMethods + clazz.methods).forEach { method ->
-        if (method.name != "<init>" && method.name != "<clinit>") {
-            methods.putIfAbsent("${method.name}/${method.parameterCount}/${Modifier.isStatic(method.modifiers)}", method)
-        }
-    }
-    return methods.values.toList()
-}
-
-private fun scoreAppendMethod(method: Method, owner: Class<*>): Int {
-    val listIndex = method.listParameterIndexes().firstOrNull() ?: return Int.MIN_VALUE
-    var score = 0
-    if (listIndex == method.parameterCount - 1) score += 10_000
-    if (method.parameterCount == 6) score += 5_000
-    if (!Modifier.isStatic(method.modifiers)) score += 2_000
-    if (Modifier.isStatic(method.modifiers) && method.parameterTypes.getOrNull(1) == owner) score += 1_500
-    if (Modifier.isStatic(method.modifiers) && method.parameterTypes.firstOrNull() == owner) score += 750
-    score -= method.parameterCount * 10
-    return score
-}
-
-private fun scoreFactoryMethod(method: Method, owner: Class<*>): Int {
-    var score = 0
-    if (method.parameterCount == 6) score += 4_000
-    if (method.parameterCount == 5) score += 3_000
-    if (method.parameterTypes.getOrNull(1) == owner) score += 2_000
-    if (method.parameterTypes.firstOrNull() == owner) score += 1_000
-    if (method.parameterTypes.firstOrNull()?.name == "com.facebook.auth.usersession.FbUserSession") score += 500
-    score -= method.parameterCount * 10
-    return score
-}
-
-/** Resolves the static/instance "append item(s) to the in-progress Reels list" method:
- *  exactly one List-typed parameter, positioned last, on the resolved list-builder class. */
-fun resolveListBuilderAppendMethod(listBuilderClass: Class<*>): Method =
-    resolveListBuilderMethods(listBuilderClass)
-        .filter { method ->
-            method.returnType == Void.TYPE &&
-            method.listParameterIndexes().size == 1 &&
-            method.listParameterIndexes().first() == method.parameterCount - 1
-        }
-        .maxByOrNull { method -> scoreAppendMethod(method, listBuilderClass) }
-        ?.apply { isAccessible = true }
-        ?: error("Unable to resolve the Facebook Reels list append method on ${listBuilderClass.name}")
-
-/** Resolves the static "ArrayList factory(listBuilder, ..., boolean)" method —
- *  optional: not every Facebook build has a separate factory method. */
-fun resolveListBuilderFactoryMethod(listBuilderClass: Class<*>): Method? =
-    resolveListBuilderMethods(listBuilderClass)
-        .filter { method ->
-            Modifier.isStatic(method.modifiers) &&
-            method.returnType == ArrayList::class.java &&
-            method.parameterTypes.lastOrNull() == Boolean::class.javaPrimitiveType &&
-            (method.parameterTypes.firstOrNull() == listBuilderClass || method.parameterTypes.getOrNull(1) == listBuilderClass)
-        }
-        .maxByOrNull { method -> scoreFactoryMethod(method, listBuilderClass) }
-        ?.apply { isAccessible = true }
 
 // ─── Hook installers – Story ad providers ────────────────────────────────────
 
@@ -1023,8 +749,7 @@ fun hookGameAdActivityLaunchFallbacks() {
     }
 }
 
-/** Hook ViewGroup.addView, TextView.setText, View.setContentDescription, WebView
- *  methods to catch native ad views and text-marker-based ad cards. */
+/** Hook ViewGroup.addView, TextView.setText, WebView methods to catch native ad views. */
 fun hookGlobalGameAdSurfaceFallbacks() {
     if (!gameAdSurfaceHooksInstalled.compareAndSet(0, 1)) return
     var hooked = 0
@@ -1036,29 +761,12 @@ fun hookGlobalGameAdSurfaceFallbacks() {
             m.isAccessible = true
             XposedBridge.hookMethod(m, object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
-                    val parent = param.thisObject as? ViewGroup
                     val child = param.args.firstOrNull { it is View } as? View ?: return
-                    when {
-                        isPotentialNativeGameAdView(child) -> {
-                            hideLikelyAdContainer(child, "native ad view add ${child.javaClass.name}")
-                            scheduleGameAdSurfaceSweep(child, "native ad view add ${child.javaClass.name}")
-                        }
-                        isPotentialExplicitFeedAdMarkerView(child) -> {
-                            hideLikelyAdContainer(child, "explicit feed ad view add ${child.javaClass.name}")
-                            scheduleGameAdSurfaceSweep(child, "explicit feed ad view add ${child.javaClass.name}")
-                        }
-                        ENABLE_FEED_UI_MARKER_FALLBACKS && isPotentialFeedAdMarkerView(child) -> {
-                            hideLikelyAdContainer(child, "feed ad marker view add ${child.javaClass.name}")
-                            scheduleGameAdSurfaceSweep(child, "feed ad marker view add ${child.javaClass.name}")
-                        }
-                        ENABLE_FEED_UI_MARKER_FALLBACKS && isPotentialFeedReelCtaAdMarkerView(child) -> {
-                            hideLikelyFeedReelCtaAdContainer(child, "feed reel CTA view add ${child.javaClass.name}")
-                            scheduleGameAdSurfaceSweep(child, "feed reel CTA view add ${child.javaClass.name}")
-                        }
-                        shouldScheduleFeedRowSweep(parent, child) -> {
-                            scheduleFeedRowSweep(child, "feed row add ${child.javaClass.name}")
-                        }
-                        child is WebView -> injectGameAdHidingScript(child)
+                    if (isPotentialNativeGameAdView(child)) {
+                        hideLikelyGameAdContainer(child, "native ad view add ${child.javaClass.name}")
+                        scheduleGameAdSurfaceSweep(child, "native ad view add ${child.javaClass.name}")
+                    } else if (child is WebView) {
+                        injectGameAdHidingScript(child)
                     }
                 }
             }); hooked++
@@ -1072,38 +780,7 @@ fun hookGlobalGameAdSurfaceFallbacks() {
             XposedBridge.hookMethod(m, object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val tv = param.thisObject as? TextView ?: return
-                    if (isExplicitFeedAdMarkerText(tv.text)) {
-                        hideLikelyAdContainer(tv, "explicit feed ad text")
-                        return
-                    }
-                    if (!ENABLE_FEED_UI_MARKER_FALLBACKS) return
-                    if (isAnyAdMarkerText(tv.text)) {
-                        hideLikelyAdContainer(tv, "ad marker text")
-                    } else if (isFeedReelCtaAdMarkerText(tv.text)) {
-                        hideLikelyFeedReelCtaAdContainer(tv, "feed reel CTA text")
-                    }
-                }
-            }); hooked++
-        }
-
-    (View::class.java.declaredMethods + View::class.java.methods)
-        .filter { m -> m.name == "setContentDescription" && m.parameterTypes.size == 1 && CharSequence::class.java.isAssignableFrom(m.parameterTypes[0]) }
-        .distinctBy { m -> m.name + m.parameterTypes.joinToString { it.name } }
-        .forEach { m ->
-            m.isAccessible = true
-            XposedBridge.hookMethod(m, object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    val v = param.thisObject as? View ?: return
-                    if (isExplicitFeedAdMarkerText(v.contentDescription)) {
-                        hideLikelyAdContainer(v, "explicit feed ad content description")
-                        return
-                    }
-                    if (!ENABLE_FEED_UI_MARKER_FALLBACKS) return
-                    if (isFeedAdMarkerText(v.contentDescription)) {
-                        hideLikelyAdContainer(v, "feed ad content description")
-                    } else if (isFeedReelCtaAdMarkerText(v.contentDescription)) {
-                        hideLikelyFeedReelCtaAdContainer(v, "feed reel CTA content description")
-                    }
+                    if (isGameAdMarkerText(tv.text)) hideLikelyGameAdContainer(tv, "ad marker text ${m.name}")
                 }
             }); hooked++
         }
@@ -1184,7 +861,7 @@ private fun tryHookAudienceNetworkRewardClass(clazz: Class<*>) {
                         override fun beforeHookedMethod(param: MethodHookParam) { rememberAudienceNetworkRewardListeners(param.thisObject, param.args, m) }
                     }); hooked++
                 }
-            }.onFailure {  }
+            }
         }
 }
 
@@ -1310,7 +987,6 @@ fun completeRecentGameAdRequests(source: String) {
 private fun dispatchPostResolveGameAdSignals(target: Any?, payload: Any?, messageType: String?) {
     if (messageType in setOf("loadbanneradasync", "hidebanneradasync")) {
         val content = buildGameAdSuccessPayload(payload, messageType)
-        dispatchGameEvent(target, "hidebannerad", content)
     }
 }
 
@@ -1447,7 +1123,7 @@ private fun completeAudienceNetworkRewardObject(adObject: Any, source: String = 
     listeners.addAll(findAudienceNetworkRewardListeners(adObject))
     var invoked = 0
     listeners.forEach { listener -> invoked += invokeAudienceNetworkRewardListenerCallbacks(listener, adObject, source) }
-    if (invoked > 0) { completeRecentGameAdRequests(source); return true }
+    if (invoked > 0) {  completeRecentGameAdRequests(source); return true }
     return false
 }
 
@@ -1464,7 +1140,6 @@ private fun invokeAudienceNetworkRewardListenerCallbacks(listener: Any, adObject
             .forEach { m ->
                 val args = audienceNetworkCallbackArgs(m, adObject) ?: return@forEach
                 runCatching { m.invoke(listener, *args); invoked++ }
-                    .onFailure {  }
             }
     }
     return invoked
@@ -1606,49 +1281,15 @@ private fun audienceNetworkMethodsFor(type: Class<*>): List<Method> {
 
 private val GAME_AD_WEBVIEW_HIDE_SCRIPT = """
 (function(){
-  if (window.__nexalloyFbAdSweep) return;
-  window.__nexalloyFbAdSweep = true;
-  function textOf(el) {
-    try { return (el.innerText || el.textContent || '').toLowerCase(); } catch (e) { return ''; }
-  }
-  function attrsOf(el) {
-    try { return ((el.id || '') + ' ' + (el.className || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('src') || '')).toLowerCase(); } catch (e) { return ''; }
-  }
-  function nearBottom(el) {
-    try {
-      var r = el.getBoundingClientRect();
-      return r.height > 0 && r.height < Math.max(260, window.innerHeight * 0.35) && r.bottom > window.innerHeight * 0.55;
-    } catch (e) { return false; }
-  }
+  if (window.__nexalloyFbAdSweep) return; window.__nexalloyFbAdSweep = true;
   function isAd(el) {
-    var t = textOf(el);
-    var a = attrsOf(el);
+    var t = (el.innerText || el.textContent || '').toLowerCase();
+    var a = ((el.id || '') + ' ' + (el.className || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
     if (t.indexOf('ads served by meta') >= 0 || t.indexOf('ad choices') >= 0) return true;
-    if (!nearBottom(el)) return false;
-    if ((el.tagName || '').toLowerCase() === 'iframe') return true;
-    return /audiencenetwork|adchoices|fbinstant.*ad|instant.*ad|banner.?ad|ad.?banner|ad-container|ad_container|sponsored/.test(a);
+    return /audiencenetwork|adchoices|fbinstant.*ad|banner.?ad|ad.?banner|ad-container|ad_container|sponsored/.test(a);
   }
-  function hide(el) {
-    try {
-      var target = el;
-      for (var i = 0; i < 4 && target.parentElement && nearBottom(target.parentElement); i++) target = target.parentElement;
-      target.style.setProperty('display', 'none', 'important');
-      target.style.setProperty('visibility', 'hidden', 'important');
-      target.style.setProperty('height', '0px', 'important');
-      target.style.setProperty('min-height', '0px', 'important');
-      target.style.setProperty('pointer-events', 'none', 'important');
-    } catch (e) {}
-  }
-  function sweep() {
-    try {
-      document.querySelectorAll('iframe, div, section, aside, [id], [class], [aria-label]').forEach(function(el) {
-        if (isAd(el)) hide(el);
-      });
-    } catch (e) {}
-  }
-  sweep();
-  new MutationObserver(sweep).observe(document.documentElement || document.body, {childList:true, subtree:true, attributes:true});
-  setInterval(sweep, 1000);
+  function sweep() { try { document.querySelectorAll('iframe,div,section,aside,[id],[class]').forEach(function(el){ if(isAd(el)) { el.style.setProperty('display','none','important'); } }); } catch(e){} }
+  sweep(); new MutationObserver(sweep).observe(document.documentElement||document.body,{childList:true,subtree:true}); setInterval(sweep,1000);
 })();
 """.trimIndent()
 
@@ -1659,34 +1300,12 @@ private fun scheduleGameAdSurfaceSweep(view: View?, reason: String) {
     }
 }
 
-/** Feed rows often lazy-render their "Sponsored"/"Hide ad" markers after initial layout —
- *  schedule a short delayed sweep whenever a row is added directly under a RecyclerView. */
-private fun shouldScheduleFeedRowSweep(parent: ViewGroup?, child: View?): Boolean {
-    if (parent == null || child !is ViewGroup) return false
-    return parent.javaClass.name.contains("RecyclerView")
-}
-
-private fun scheduleFeedRowSweep(view: View?, reason: String) {
-    val subtree = view ?: return
-    longArrayOf(60L, 500L, 1_500L, 3_000L).forEach { delayMs ->
-        subtree.postDelayed({ sweepGameAdSurface(subtree, reason) }, delayMs)
-    }
-}
-
 private fun sweepGameAdSurface(view: View?, reason: String): Boolean {
     if (view == null) return false
     var hidden = false
     if (view is WebView) injectGameAdHidingScript(view)
-    if (isLikelyExplicitFeedAdCardContainer(view)) {
-        hidden = hideLikelyExplicitFeedAdCardContainer(view, reason) || hidden
-    }
-    if (isPotentialNativeGameAdView(view) || isPotentialExplicitFeedAdMarkerView(view) ||
-        (ENABLE_FEED_UI_MARKER_FALLBACKS &&
-         (isPotentialFeedAdMarkerView(view) || (view is TextView && isAnyAdMarkerText(view.text))))) {
-        hidden = hideLikelyAdContainer(view, reason) || hidden
-    }
-    if (ENABLE_FEED_UI_MARKER_FALLBACKS && isPotentialFeedReelCtaAdMarkerView(view)) {
-        hidden = hideLikelyFeedReelCtaAdContainer(view, reason) || hidden
+    if (isPotentialNativeGameAdView(view) || (view is TextView && isGameAdMarkerText(view.text))) {
+        hidden = hideLikelyGameAdContainer(view, reason) || hidden
     }
     val group = view as? ViewGroup ?: return hidden
     for (i in 0 until group.childCount) {
@@ -1697,297 +1316,28 @@ private fun sweepGameAdSurface(view: View?, reason: String): Boolean {
 
 private fun injectGameAdHidingScript(webView: WebView) {
     webView.post { runCatching { webView.evaluateJavascript(GAME_AD_WEBVIEW_HIDE_SCRIPT, null) } }
-
 }
 
-private fun hideLikelyAdContainer(view: View, reason: String): Boolean {
+private fun hideLikelyGameAdContainer(view: View, reason: String): Boolean {
     val root = view.rootView
-    val target = when {
-        shouldUseExplicitFeedMarkerCardTarget(view) -> {
-            resolveLikelyExplicitFeedAdCardTarget(view) ?: run {
-                return false
+    val candidates = arrayListOf(view)
+    var hidden = false
+    candidates.forEach { candidate ->
+        if (candidate.visibility != View.GONE) {
+            candidate.visibility = View.GONE
+            hidden = true
+        }
+        candidate.minimumHeight = 0
+        candidate.layoutParams?.let { params ->
+            if (isLikelyBannerSized(candidate, root) || isPotentialNativeGameAdView(candidate)) {
+                params.height = 0
+                candidate.layoutParams = params
+                hidden = true
             }
         }
-        shouldUseFeedMarkerCardTarget(view) -> {
-            resolveLikelyFeedMarkerCardTarget(view) ?: run {
-                return false
-            }
-        }
-        else -> resolveLikelyAdContainerTarget(view)
+        candidate.requestLayout()
     }
-    return hideResolvedAdSurfaceTarget(target, view, root, reason, forceCollapseHeight = false)
-}
-
-private fun hideLikelyExplicitFeedAdCardContainer(view: View, reason: String): Boolean {
-    val target = resolveLikelyExplicitFeedAdCardTarget(view) ?: return false
-    return hideResolvedAdSurfaceTarget(target, view, view.rootView, "$reason explicit feed card", forceCollapseHeight = true)
-}
-
-private fun hideResolvedAdSurfaceTarget(
-    target: View, source: View, root: View?, reason: String, forceCollapseHeight: Boolean
-): Boolean {
-    var hidden = false
-    if (target.visibility != View.GONE) { target.visibility = View.GONE; hidden = true }
-    target.minimumHeight = 0
-    target.layoutParams?.let { params ->
-        if (forceCollapseHeight || target !== source ||
-            isLikelyBannerSized(target, root) || isPotentialNativeGameAdView(target) ||
-            isPotentialFeedAdMarkerView(source) || isPotentialExplicitFeedAdMarkerView(source)) {
-            params.height = 0; target.layoutParams = params; hidden = true
-        }
-    }
-    target.requestLayout()
     return hidden
-}
-
-private fun hideLikelyFeedReelCtaAdContainer(view: View, reason: String): Boolean {
-    val target = resolveLikelyFeedReelCtaAdContainerTarget(view) ?: return false
-    var hidden = false
-    if (target.visibility != View.GONE) { target.visibility = View.GONE; hidden = true }
-    target.minimumHeight = 0
-    target.layoutParams?.let { params -> params.height = 0; target.layoutParams = params; hidden = true }
-    target.requestLayout()
-    return hidden
-}
-
-/** Walks up from [view] while the parent still looks like a single post container
- *  (≥82% root width, height bounded relative to root and to the child) — used by
- *  the native-ad / game-ad fallback path where we don't have explicit text markers. */
-private fun resolveLikelyAdContainerTarget(view: View): View {
-    val root = view.rootView ?: return view
-    var current = view
-    var selected = view
-    val rootWidth  = root.width.takeIf { it > 0 } ?: 0
-    val rootHeight = root.height.takeIf { it > 0 } ?: 0
-    while (true) {
-        val parentView = current.parent as? View ?: break
-        if (parentView.javaClass.name.contains("RecyclerView")) break
-        val parentWidth  = parentView.width
-        val parentHeight = parentView.height
-        val looksLikePostContainer = rootWidth > 0 && rootHeight > 0 &&
-            parentWidth >= (rootWidth * 0.82f).toInt() &&
-            parentHeight > 0 && parentHeight < (rootHeight * 0.72f).toInt()
-        if (!looksLikePostContainer) break
-        val currentHeight = current.height.takeIf { it > 0 } ?: parentHeight
-        if (currentHeight > 0 && parentHeight > maxOf((currentHeight * 1.25f).toInt(), currentHeight + 180)) break
-        selected = parentView; current = parentView
-    }
-    return selected
-}
-
-private fun shouldUseFeedMarkerCardTarget(view: View): Boolean =
-    isPotentialFeedAdMarkerView(view) || (view is TextView && isFeedAdMarkerText(view.text))
-
-private fun shouldUseExplicitFeedMarkerCardTarget(view: View): Boolean =
-    isPotentialExplicitFeedAdMarkerView(view) || (view is TextView && isExplicitFeedAdMarkerText(view.text))
-
-private data class ExplicitFeedAdCardSignals(
-    val hasHideAd: Boolean, val hasAdLabel: Boolean, val hasSharedLink: Boolean, val hasStrongCta: Boolean
-)
-
-/** Walks UP from a marker view to find the full post card that should be collapsed —
- *  picks the largest matching ancestor rather than the first one found. */
-private fun resolveLikelyExplicitFeedAdCardTarget(view: View): View? {
-    val root = view.rootView ?: return null
-    val rootWidth  = root.width.takeIf  { it > 0 } ?: return null
-    val rootHeight = root.height.takeIf { it > 0 } ?: return null
-    var current: View? = view
-    var best: View? = null
-    var bestHeight = -1
-    while (current != null) {
-        if (isLikelyExplicitFeedAdCardContainer(current, rootWidth, rootHeight)) {
-            val h = current.height
-            if (h > bestHeight) { best = current; bestHeight = h }
-        }
-        current = current.parent as? View ?: break
-    }
-    return best
-}
-
-private fun resolveLikelyFeedMarkerCardTarget(view: View): View? {
-    val root = view.rootView ?: return null
-    val rootWidth  = root.width.takeIf  { it > 0 } ?: return null
-    val rootHeight = root.height.takeIf { it > 0 } ?: return null
-    var current: View? = view
-    var best: View? = null
-    var bestHeight = -1
-    while (current != null) {
-        if (isSafeFeedMarkerCardCandidate(current, rootWidth, rootHeight)) {
-            val h = current.height
-            if (h > bestHeight) { best = current; bestHeight = h }
-        }
-        current = current.parent as? View ?: break
-    }
-    return best
-}
-
-/** Bounding-box safety check to avoid the broad feed-marker fallback collapsing
- *  something that isn't a full post card (e.g. a toolbar or a comment row). */
-private fun isSafeFeedMarkerCardCandidate(view: View, rootWidth: Int, rootHeight: Int): Boolean {
-    val width = view.width; val height = view.height
-    if (width < (rootWidth * 0.82f).toInt()) return false
-    if (height < maxOf(360, (rootHeight * 0.18f).toInt())) return false
-    if (height > (rootHeight * 0.82f).toInt()) return false
-    val location = IntArray(2)
-    val topOnScreen = runCatching { view.getLocationOnScreen(location); location[1] }.getOrDefault(view.top)
-    val bottomOnScreen = topOnScreen + height
-    if (topOnScreen < (rootHeight * 0.04f).toInt()) return false
-    if (bottomOnScreen > (rootHeight * 0.96f).toInt()) return false
-    return true
-}
-
-private fun isLikelyExplicitFeedAdCardContainer(view: View): Boolean {
-    val root = view.rootView ?: return false
-    val rootWidth  = root.width.takeIf  { it > 0 } ?: return false
-    val rootHeight = root.height.takeIf { it > 0 } ?: return false
-    return isLikelyExplicitFeedAdCardContainer(view, rootWidth, rootHeight)
-}
-
-private fun isLikelyExplicitFeedAdCardContainer(view: View, rootWidth: Int, rootHeight: Int): Boolean {
-    if (view !is ViewGroup) return false
-    val width = view.width; val height = view.height
-    if (width < (rootWidth * 0.82f).toInt()) return false
-    if (height < maxOf(420, (rootHeight * 0.18f).toInt())) return false
-    if (height > (rootHeight * 0.96f).toInt()) return false
-    val location = IntArray(2)
-    val topOnScreen = runCatching { view.getLocationOnScreen(location); location[1] }.getOrDefault(view.top)
-    val bottomOnScreen = topOnScreen + height
-    if (topOnScreen < (rootHeight * 0.04f).toInt()) return false
-    if (bottomOnScreen > (rootHeight * 0.98f).toInt()) return false
-    val signals = collectExplicitFeedAdCardSignals(view)
-    return signals.hasHideAd && (signals.hasAdLabel || signals.hasSharedLink || signals.hasStrongCta)
-}
-
-/** Requires "Hide ad" PLUS at least one of: AdChoices label, "Shared link:", or a
- *  strong CTA phrase ("Learn More", "Shop Now"...) — this combination is what makes
- *  the explicit detector safe to leave always-on (low false positive rate). */
-private fun collectExplicitFeedAdCardSignals(root: View): ExplicitFeedAdCardSignals {
-    val queue = java.util.ArrayDeque<View>(); queue.add(root)
-    var visited = 0
-    var hasHideAd = false; var hasAdLabel = false; var hasSharedLink = false; var hasStrongCta = false
-    while (queue.isNotEmpty() && visited < 192 && !(hasHideAd && (hasAdLabel || hasSharedLink || hasStrongCta))) {
-        val view = queue.removeFirst(); visited++
-        for (marker in collectViewMarkerTexts(view)) {
-            val normalized = marker.lowercase()
-            if (!hasHideAd && normalized.contains("hide ad")) hasHideAd = true
-            if (!hasAdLabel && isExplicitFeedAdMarkerText(normalized)) hasAdLabel = true
-            if (!hasSharedLink && normalized.contains("shared link:")) hasSharedLink = true
-            if (!hasStrongCta && isExplicitFeedAdCtaText(normalized)) hasStrongCta = true
-        }
-        val group = view as? ViewGroup ?: continue
-        for (i in 0 until group.childCount) queue.addLast(group.getChildAt(i))
-    }
-    return ExplicitFeedAdCardSignals(hasHideAd, hasAdLabel, hasSharedLink, hasStrongCta)
-}
-
-private fun resolveLikelyFeedReelCtaAdContainerTarget(view: View): View? {
-    val root = view.rootView ?: return null
-    val rootWidth  = root.width.takeIf  { it > 0 } ?: return null
-    val rootHeight = root.height.takeIf { it > 0 } ?: return null
-    var current: View? = view
-    while (current != null) {
-        if (isLikelyFeedReelCtaAdContainer(current, rootWidth, rootHeight)) return current
-        current = current.parent as? View ?: break
-    }
-    return null
-}
-
-private data class FeedReelCtaAdSignals(
-    val hasSharedLink: Boolean, val hasSendMessageCta: Boolean,
-    val hasReelSurface: Boolean, val hasLeadGenPrompt: Boolean
-)
-
-private fun isLikelyFeedReelCtaAdContainer(view: View, rootWidth: Int, rootHeight: Int): Boolean {
-    val width = view.width; val height = view.height
-    if (width < (rootWidth * 0.82f).toInt()) return false
-    if (height < (rootHeight * 0.45f).toInt() || height > (rootHeight * 0.92f).toInt()) return false
-    val location = IntArray(2)
-    val topOnScreen = runCatching { view.getLocationOnScreen(location); location[1] }.getOrDefault(view.top)
-    if (topOnScreen < (rootHeight * 0.08f).toInt()) return false
-    val signals = collectFeedReelCtaAdSignals(view)
-    return signals.hasSharedLink && signals.hasSendMessageCta && (signals.hasReelSurface || signals.hasLeadGenPrompt)
-}
-
-private fun collectFeedReelCtaAdSignals(root: View): FeedReelCtaAdSignals {
-    val queue = java.util.ArrayDeque<View>(); queue.add(root)
-    var visited = 0
-    var hasSharedLink = false; var hasSendMessageCta = false; var hasReelSurface = false; var hasLeadGenPrompt = false
-    while (queue.isNotEmpty() && visited < 128 &&
-           !(hasSharedLink && hasSendMessageCta && (hasReelSurface || hasLeadGenPrompt))) {
-        val view = queue.removeFirst(); visited++
-        val className = view.javaClass.name.lowercase()
-        val contentDescription = view.contentDescription?.toString().orEmpty().lowercase()
-        val text = (view as? TextView)?.text?.toString().orEmpty().lowercase()
-        val marker = "$className $contentDescription $text"
-        if (!hasSharedLink && marker.contains("shared link:")) hasSharedLink = true
-        if (!hasSendMessageCta && marker.contains("send message")) hasSendMessageCta = true
-        if (!hasLeadGenPrompt && (marker.contains("your business") || marker.contains("your ad"))) hasLeadGenPrompt = true
-        if (!hasReelSurface && (marker.contains("reel") || className.contains("surfaceview") ||
-                                 className.contains("textureview") || className.contains("videoview"))) hasReelSurface = true
-        val group = view as? ViewGroup ?: continue
-        for (i in 0 until group.childCount) queue.addLast(group.getChildAt(i))
-    }
-    return FeedReelCtaAdSignals(hasSharedLink, hasSendMessageCta, hasReelSurface, hasLeadGenPrompt)
-}
-
-/** Collects visible text + accessibility text/content-description — Meta's ad labels
- *  are sometimes accessibility-only (invisible on screen but read by screen readers
- *  and inspectable here), which is why both sources are checked. */
-private fun collectViewMarkerTexts(view: View?): List<String> {
-    if (view == null) return emptyList()
-    val values = LinkedHashSet<String>()
-    view.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let(values::add)
-    (view as? TextView)?.text?.toString()?.takeIf { it.isNotBlank() }?.let(values::add)
-    runCatching {
-        val info = view.createAccessibilityNodeInfo() ?: return@runCatching
-        try {
-            info.text?.toString()?.takeIf { it.isNotBlank() }?.let(values::add)
-            info.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let(values::add)
-        } finally { info.recycle() }
-    }
-    return values.toList()
-}
-
-private fun isPotentialFeedAdMarkerView(view: View?): Boolean {
-    if (view == null) return false
-    return collectViewMarkerTexts(view).any(::isFeedAdMarkerText)
-}
-
-private fun isPotentialExplicitFeedAdMarkerView(view: View?): Boolean {
-    if (view == null) return false
-    return collectViewMarkerTexts(view).any(::isExplicitFeedAdMarkerText)
-}
-
-private fun isPotentialFeedReelCtaAdMarkerView(view: View?): Boolean {
-    if (view == null) return false
-    return collectViewMarkerTexts(view).any(::isFeedReelCtaAdMarkerText)
-}
-
-private fun isAnyAdMarkerText(value: CharSequence?): Boolean =
-    isGameAdMarkerText(value) || isFeedAdMarkerText(value)
-
-private fun isFeedAdMarkerText(value: CharSequence?): Boolean {
-    if (value.isNullOrBlank()) return false
-    val normalized = value.toString().lowercase()
-    return FEED_SURFACE_AD_MARKER_TOKENS.any { token -> normalized.contains(token) }
-}
-
-private fun isExplicitFeedAdMarkerText(value: CharSequence?): Boolean {
-    if (value.isNullOrBlank()) return false
-    val normalized = value.toString().lowercase()
-    return EXPLICIT_FEED_CARD_AD_MARKER_TOKENS.any { token -> normalized.contains(token) }
-}
-
-private fun isExplicitFeedAdCtaText(value: CharSequence?): Boolean {
-    if (value.isNullOrBlank()) return false
-    val normalized = value.toString().lowercase()
-    return EXPLICIT_FEED_AD_CTA_TOKENS.any { token -> normalized.contains(token) }
-}
-
-private fun isFeedReelCtaAdMarkerText(value: CharSequence?): Boolean {
-    if (value.isNullOrBlank()) return false
-    val normalized = value.toString().lowercase()
-    return FEED_REEL_CTA_AD_MARKER_TOKENS.any { token -> normalized.contains(token) }
 }
 
 private fun isLikelyBannerSized(view: View, root: View?): Boolean {
@@ -2184,57 +1534,25 @@ fun resolveLithoRenderMethod(componentClass: Class<*>): Method? =
 
 // ─── Story ad provider resolution ────────────────────────────────────────────
 
-// ─── Instream banner eligibility resolution ───────────────────────────────────
-// Mirrors upstream resolveInstreamBannerEligibilityMethod: prefer a non-static
-// boolean()/0-param method declared on (or inherited by) the resolved candidate
-// class; if none exists there, walk up the superclass chain looking for one
-// declared directly on an ancestor. Needs a real Class<*> (classLoader), so —
-// like the list-builder append/factory methods above — this runs here rather
-// than as a DexKit fingerprint.
-fun resolveInstreamBannerEligibilityMethod(candidateClass: Class<*>): Method? {
-    (candidateClass.declaredMethods + candidateClass.methods)
-        .firstOrNull { m ->
-            !Modifier.isStatic(m.modifiers) &&
-            m.returnType == Boolean::class.javaPrimitiveType &&
-            m.parameterCount == 0
-        }
-        ?.apply { isAccessible = true }
-        ?.let { return it }
-
-    var current: Class<*>? = candidateClass.superclass
-    while (current != null && current != Any::class.java) {
-        current.declaredMethods.firstOrNull { m ->
-            !Modifier.isStatic(m.modifiers) &&
-            m.returnType == Boolean::class.javaPrimitiveType &&
-            m.parameterCount == 0
-        }?.let { it.isAccessible = true; return it }
-        current = current.superclass
-    }
-    return null
-}
-
 fun resolveStoryAdProviderHooks(
     providerClass: Class<*>,
     includeInsertionTrigger: Boolean,
     insertionTriggerMethod: Method? = null
 ): StoryAdProviderHooks {
     val methods = providerClass.declaredMethods + providerClass.methods
-    // NOTE: upstream's DexKit matchers for all three methods below never filtered on
-    // static vs. instance — only on shape (return type + param types) — so we don't
-    // either, to avoid silently missing a method that happens to be static.
     val mergeMethod = methods.firstOrNull { m ->
-        m.parameterCount == 3 &&
+        !Modifier.isStatic(m.modifiers) && m.parameterCount == 3 &&
         m.returnType.name == "com.google.common.collect.ImmutableList" &&
         m.parameterTypes[0].name == "com.facebook.auth.usersession.FbUserSession" &&
         m.parameterTypes[2].name == "com.google.common.collect.ImmutableList"
     }?.apply { isAccessible = true }
     val fetchMoreAdsMethod = methods.firstOrNull { m ->
-        m.parameterCount == 2 && m.returnType == Void.TYPE &&
+        !Modifier.isStatic(m.modifiers) && m.parameterCount == 2 && m.returnType == Void.TYPE &&
         m.parameterTypes[0].name == "com.google.common.collect.ImmutableList" &&
         m.parameterTypes[1] == Int::class.javaPrimitiveType
     }?.apply { isAccessible = true }
     val deferredUpdateMethod = methods.firstOrNull { m ->
-        m.parameterCount == 2 && m.returnType == Void.TYPE &&
+        !Modifier.isStatic(m.modifiers) && m.parameterCount == 2 && m.returnType == Void.TYPE &&
         m.parameterTypes[1].name == "com.google.common.collect.ImmutableList"
     }?.apply { isAccessible = true }
     // insertionTriggerMethod is resolved via DexKit fingerprint (usingStrings("ads_insertion"))
