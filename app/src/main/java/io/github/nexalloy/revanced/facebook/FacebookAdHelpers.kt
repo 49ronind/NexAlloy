@@ -274,12 +274,14 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
         val model       = invokeNoThrow(itemModelAccessor, value)
         val edge        = edgeFrom(value)
         val feedUnit    = feedUnitFrom(edge)
-        val backendData = backendDataFrom(edge)
+        // TEST 3 - DISABLED: backendData is new in this version; skip it to check
+        // if it's contributing to the mis-hide (old code never looked at it).
+        // val backendData = backendDataFrom(edge)
         if (containsKnownAdSignals(value))       return true
         if (containsKnownAdSignals(model))       return true
         if (containsKnownAdSignals(edge))        return true
         if (containsKnownAdSignals(feedUnit))    return true
-        if (containsKnownAdSignals(backendData)) return true
+        // if (containsKnownAdSignals(backendData)) return true
         return false
     }
 
@@ -291,21 +293,21 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
         if (isSponsoredFeedCategory(modelCategory))     return true
 
         val edge         = edgeFrom(value)
-        val edgeCategory = readEdgeCategory(edge) ?: readCategory(edge)
+        // TEST 3 - DISABLED: readEdgeCategory is new; fall back to the old readCategory only.
+        val edgeCategory = /* readEdgeCategory(edge) ?: */ readCategory(edge)
         if (isSafeFeedContainerCategory(edgeCategory)) return false
         if (isSponsoredFeedCategory(edgeCategory))     return true
 
         val feedUnit               = feedUnitFrom(edge)
-        val backendData            = backendDataFrom(edge)
+        // val backendData            = backendDataFrom(edge)
         val inflatedUnitClassName  = feedUnit?.javaClass?.name
-        val backendUnitClassName   = backendData?.javaClass?.name
+        // val backendUnitClassName   = backendData?.javaClass?.name
         if (inflatedUnitClassName == GRAPHQL_MULTI_ADS_FEED_UNIT_CLASS ||
             inflatedUnitClassName == GRAPHQL_QUICK_PROMO_FEED_UNIT_CLASS) return true
 
-        val typeName = readTypeName(feedUnit) ?: readTypeName(backendData)
+        val typeName = readTypeName(feedUnit) /* ?: readTypeName(backendData) */
         if (isLikelyAdTypeName(typeName) ||
-            isAdSignalText(inflatedUnitClassName) ||
-            isAdSignalText(backendUnitClassName)) return true
+            isAdSignalText(inflatedUnitClassName) /* || isAdSignalText(backendUnitClassName) */) return true
 
         return false
     }
