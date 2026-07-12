@@ -1055,7 +1055,11 @@ fun hookGlobalGameAdSurfaceFallbacks() {
                             hideLikelyFeedReelCtaAdContainer(child, "feed reel CTA view add ${child.javaClass.name}")
                             scheduleGameAdSurfaceSweep(child, "feed reel CTA view add ${child.javaClass.name}")
                         }
-                        shouldScheduleFeedRowSweep(parent, child) -> {
+                        false && shouldScheduleFeedRowSweep(parent, child) -> {
+                            // TEST 1 - DISABLED: feed-row periodic sweep (new in this
+                            // version, not present in the old code). Left in place but
+                            // unreachable so it's easy to re-enable by removing "false &&"
+                            // once we confirm whether this is the source of the mis-hide.
                             scheduleFeedRowSweep(child, "feed row add ${child.javaClass.name}")
                         }
                         child is WebView -> injectGameAdHidingScript(child)
