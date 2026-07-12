@@ -1978,12 +1978,16 @@ private fun isFeedAdMarkerText(value: CharSequence?): Boolean {
 private val AD_BULLET_MARKER_REGEX = Regex("(?:^|[^\\p{L}\\p{N}])ad\\u2022")
 
 private fun isExplicitFeedAdMarkerText(value: CharSequence?): Boolean {
-    if (value.isNullOrBlank()) return false
-    val normalized = value.toString().lowercase()
-    return EXPLICIT_FEED_CARD_AD_MARKER_TOKENS.any { token ->
-        if (token == "ad\u2022") AD_BULLET_MARKER_REGEX.containsMatchIn(normalized)
-        else normalized.contains(token)
-    }
+    // TEST 2 - DISABLED: short-circuit to false to check if this always-on detector
+    // (not gated by ENABLE_FEED_UI_MARKER_FALLBACKS) is the source of the mis-hide.
+    // Restore the block below (uncomment + remove the early return) once confirmed.
+    return false
+    // if (value.isNullOrBlank()) return false
+    // val normalized = value.toString().lowercase()
+    // return EXPLICIT_FEED_CARD_AD_MARKER_TOKENS.any { token ->
+    //     if (token == "ad\u2022") AD_BULLET_MARKER_REGEX.containsMatchIn(normalized)
+    //     else normalized.contains(token)
+    // }
 }
 
 private fun isExplicitFeedAdCtaText(value: CharSequence?): Boolean {
