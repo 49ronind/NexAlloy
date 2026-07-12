@@ -604,22 +604,23 @@ private fun isMarketplaceAdsPluginPack(instance: Any): Boolean {
 fun hookFeedCsrFilterInput(hook: FeedCsrFilterHook, inspector: FeedItemInspector) {
     XposedBridge.hookMethod(hook.method, object : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) {
-            val originalList = param.args.getOrNull(hook.listArgIndex) as? Iterable<*> ?: return
-            val kept = ArrayList<Any?>(); var removed = 0
-            // Strict check on the way IN: Facebook's own pipeline hasn't finished
-            // resolving every item yet here, so the broader heuristic risks false
-            // positives — only drop items we're certain are ads.
-            for (item in originalList) { if (inspector.isDefinitelySponsoredFeedItem(item)) removed++ else kept.add(item) }
-            if (removed <= 0) return
-            buildImmutableListLike(param.args.getOrNull(hook.listArgIndex), kept)?.let { param.args[hook.listArgIndex] = it }
+            // TEST 5 - DISABLED: short-circuit to check if this hook's filtering
+            // (before or after) is contributing to the mis-hide.
+            return
+            // val originalList = param.args.getOrNull(hook.listArgIndex) as? Iterable<*> ?: return
+            // val kept = ArrayList<Any?>(); var removed = 0
+            // for (item in originalList) { if (inspector.isDefinitelySponsoredFeedItem(item)) removed++ else kept.add(item) }
+            // if (removed <= 0) return
+            // buildImmutableListLike(param.args.getOrNull(hook.listArgIndex), kept)?.let { param.args[hook.listArgIndex] = it }
         }
         override fun afterHookedMethod(param: MethodHookParam) {
-            val resultItems = extractFeedItemsFromResult(param.result) ?: return
-            val kept = ArrayList<Any?>(); var removed = 0
-            // Broader check on the way OUT: the pipeline has now resolved everything,
-            // so the wider heuristic is safe to apply here.
-            for (item in resultItems) { if (inspector.isSponsoredFeedItem(item)) removed++ else kept.add(item) }
-            if (removed > 0) replaceFeedItemsInResult(param, kept)
+            // TEST 5 - DISABLED: this after-hook (result replacement via
+            // replaceFeedItemsInResult) is entirely new vs the old code.
+            return
+            // val resultItems = extractFeedItemsFromResult(param.result) ?: return
+            // val kept = ArrayList<Any?>(); var removed = 0
+            // for (item in resultItems) { if (inspector.isSponsoredFeedItem(item)) removed++ else kept.add(item) }
+            // if (removed > 0) replaceFeedItemsInResult(param, kept)
         }
     })
 }
