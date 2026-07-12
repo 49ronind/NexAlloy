@@ -19,8 +19,8 @@ import io.github.nexalloy.revanced.facebook.hookGameAdBridge
 import io.github.nexalloy.revanced.facebook.hookGameAdRequest
 import io.github.nexalloy.revanced.facebook.hookGameAdResultMethods
 import io.github.nexalloy.revanced.facebook.hookGameAdServiceDispatchMethods
-import io.github.nexalloy.revanced.facebook.hookGlobalGameAdActivityLifecycleFallback
-import io.github.nexalloy.revanced.facebook.hookGlobalGameAdSurfaceFallbacks
+// import io.github.nexalloy.revanced.facebook.hookGlobalGameAdActivityLifecycleFallback
+// import io.github.nexalloy.revanced.facebook.hookGlobalGameAdSurfaceFallbacks
 import io.github.nexalloy.revanced.facebook.hookIndicatorPillAdEligibility
 import io.github.nexalloy.revanced.facebook.hookInstreamBannerEligibility
 import io.github.nexalloy.revanced.facebook.hookLateFeedListSanitizer
@@ -229,13 +229,13 @@ val HideFacebookAds = patch(
     }
     gameAdUiHooked.values.forEach { method -> runCatching { hookPlayableAdActivity(method) } }
 
-    runCatching { hookGlobalGameAdActivityLifecycleFallback() }
+    //runCatching { hookGlobalGameAdActivityLifecycleFallback() }
 
     runCatching { hookGameAdActivityLaunchFallbacks() }
 
     // ── 13. Native ad view / WebView surface fallbacks ────────────────────────
 
-    runCatching { hookGlobalGameAdSurfaceFallbacks() }
+    //runCatching { hookGlobalGameAdSurfaceFallbacks() }
 
     // ── 14. ProfileReelsAsyncAdsQuery dispatch block ────────────────────
 
