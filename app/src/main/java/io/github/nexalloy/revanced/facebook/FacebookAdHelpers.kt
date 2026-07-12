@@ -1760,9 +1760,13 @@ private fun hideResolvedAdSurfaceTarget(
     if (target.visibility != View.GONE) { target.visibility = View.GONE; hidden = true }
     target.minimumHeight = 0
     target.layoutParams?.let { params ->
-        if (forceCollapseHeight || target !== source ||
-            isLikelyBannerSized(target, root) || isPotentialNativeGameAdView(target) ||
-            isPotentialFeedAdMarkerView(source) || isPotentialExplicitFeedAdMarkerView(source)) {
+        // TEST 6 - DISABLED: narrowed back to exactly the old code's condition.
+        // Old code: isLikelyBannerSized(candidate, root) || isPotentialNativeGameAdView(candidate)
+        // New code added forceCollapseHeight / target!==source / marker-view checks
+        // that run unconditionally (not gated by ENABLE_FEED_UI_MARKER_FALLBACKS),
+        // so a marker false-positive could set height=0 even via the old, always-on
+        // isPotentialNativeGameAdView trigger path.
+        if (isLikelyBannerSized(target, root) || isPotentialNativeGameAdView(target)) {
             params.height = 0; target.layoutParams = params; hidden = true
         }
     }
