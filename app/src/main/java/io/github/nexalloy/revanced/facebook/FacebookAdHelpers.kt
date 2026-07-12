@@ -1092,27 +1092,31 @@ fun hookGlobalGameAdSurfaceFallbacks() {
             }); hooked++
         }
 
-    (View::class.java.declaredMethods + View::class.java.methods)
-        .filter { m -> m.name == "setContentDescription" && m.parameterTypes.size == 1 && CharSequence::class.java.isAssignableFrom(m.parameterTypes[0]) }
-        .distinctBy { m -> m.name + m.parameterTypes.joinToString { it.name } }
-        .forEach { m ->
-            m.isAccessible = true
-            XposedBridge.hookMethod(m, object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    val v = param.thisObject as? View ?: return
-                    if (isExplicitFeedAdMarkerText(v.contentDescription)) {
-                        hideLikelyAdContainer(v, "explicit feed ad content description")
-                        return
-                    }
-                    if (!ENABLE_FEED_UI_MARKER_FALLBACKS) return
-                    if (isFeedAdMarkerText(v.contentDescription)) {
-                        hideLikelyAdContainer(v, "feed ad content description")
-                    } else if (isFeedReelCtaAdMarkerText(v.contentDescription)) {
-                        hideLikelyFeedReelCtaAdContainer(v, "feed reel CTA content description")
-                    }
-                }
-            }); hooked++
-        }
+    // TEST 4 - DISABLED: the setContentDescription hook itself is new in this version
+    // (old code never hooked this method at all). Registration removed entirely to
+    // check if merely having this hook installed (regardless of its internal
+    // condition, already neutralized in Test 2) is contributing to the mis-hide.
+    // (View::class.java.declaredMethods + View::class.java.methods)
+    //     .filter { m -> m.name == "setContentDescription" && m.parameterTypes.size == 1 && CharSequence::class.java.isAssignableFrom(m.parameterTypes[0]) }
+    //     .distinctBy { m -> m.name + m.parameterTypes.joinToString { it.name } }
+    //     .forEach { m ->
+    //         m.isAccessible = true
+    //         XposedBridge.hookMethod(m, object : XC_MethodHook() {
+    //             override fun afterHookedMethod(param: MethodHookParam) {
+    //                 val v = param.thisObject as? View ?: return
+    //                 if (isExplicitFeedAdMarkerText(v.contentDescription)) {
+    //                     hideLikelyAdContainer(v, "explicit feed ad content description")
+    //                     return
+    //                 }
+    //                 if (!ENABLE_FEED_UI_MARKER_FALLBACKS) return
+    //                 if (isFeedAdMarkerText(v.contentDescription)) {
+    //                     hideLikelyAdContainer(v, "feed ad content description")
+    //                 } else if (isFeedReelCtaAdMarkerText(v.contentDescription)) {
+    //                     hideLikelyFeedReelCtaAdContainer(v, "feed reel CTA content description")
+    //                 }
+    //             }
+    //         }); hooked++
+    //     }
 
     (WebView::class.java.declaredMethods + WebView::class.java.methods)
         .filter { m -> m.name in setOf("loadUrl","loadData","loadDataWithBaseURL","onAttachedToWindow") }
