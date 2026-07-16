@@ -8,24 +8,24 @@ val HideAds = patch(
     description = "Hides injected ads, sponsored content, paid partnership, and Reels/Stories ads."
 ) {
 
+    runCatching { ::feedAcpContentInjectorFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    runCatching { ::feedAdsProxyFetcherFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    runCatching { ::adControllerIndexFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    runCatching { ::adDeliveredFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    runCatching { ::adContentDeliveredExternallyFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    runCatching { ::adInsertGateFingerprint.hookMethod(XC_MethodReplacement.returnConstant(false)) }
+    runCatching { ::adHighestPositionGateFingerprint.hookMethod(XC_MethodReplacement.returnConstant(false)) }
+    runCatching { ::clipsAdPrewarmFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    runCatching { ::sponsoredReelItemBinderFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    runCatching { ::sponsoredReelMediaFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    runCatching { ::sponsoredReelLabelFooterFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    runCatching { ::sponsoredReelLabelOnBottomFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    runCatching { ::storiesAdsBinderFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    runCatching { ::storiesAdsPrepareFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    runCatching { ::sponsoredStoriesLikeButtonFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    runCatching { ::paidPartnershipLabelFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    runCatching { ::gridSponsoredPoolFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
     runCatching {
-        ::feedAcpContentInjectorFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
-        ::feedAdsProxyFetcherFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
-        ::adControllerIndexFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
-        ::adDeliveredFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
-        ::adContentDeliveredExternallyFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
-        ::adInsertGateFingerprint.hookMethod(XC_MethodReplacement.returnConstant(false))
-        ::adHighestPositionGateFingerprint.hookMethod(XC_MethodReplacement.returnConstant(false))
-        ::clipsAdPrewarmFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
-        ::sponsoredReelItemBinderFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
-        ::sponsoredReelMediaFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
-        ::sponsoredReelLabelFooterFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
-        ::sponsoredReelLabelOnBottomFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
-        ::storiesAdsBinderFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
-        ::storiesAdsPrepareFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
-        ::sponsoredStoriesLikeButtonFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
-        ::paidPartnershipLabelFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
-        ::gridSponsoredPoolFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING)
         ::clipsAdAddItemFingerprint.hookMethod {
             before { param ->
                 try {
