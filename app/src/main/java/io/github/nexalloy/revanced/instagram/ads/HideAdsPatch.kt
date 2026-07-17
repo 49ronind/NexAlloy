@@ -20,11 +20,11 @@ val HideAds = patch(
     runCatching { ::sponsoredReelMediaFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
     runCatching { ::sponsoredReelLabelFooterFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
     runCatching { ::sponsoredReelLabelOnBottomFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
-    runCatching { ::storiesAdsBinderFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
-    runCatching { ::storiesAdsPrepareFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    //runCatching { ::storiesAdsBinderFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    //runCatching { ::storiesAdsPrepareFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
     runCatching { ::sponsoredStoriesLikeButtonFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
     runCatching { ::paidPartnershipLabelFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
-    // runCatching { ::gridSponsoredPoolFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    runCatching { ::gridSponsoredPoolFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
     runCatching { ::exploreGridAdsEligibilityFingerprint.hookMethod(XC_MethodReplacement.returnConstant(false)) }
     runCatching { ::searchGridAdsEligibilityFingerprint.hookMethod(XC_MethodReplacement.returnConstant(false)) }
     runCatching { ::exploreGridAdsDeliveryFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
