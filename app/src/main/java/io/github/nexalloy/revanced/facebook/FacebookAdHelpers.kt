@@ -100,7 +100,13 @@ val FEED_AD_SIGNAL_TOKENS = listOf(
     "sponsored", "promotion", "multiads", "quickpromotion",
     "reels_banner_ad", "reelsbannerads", "reels_post_loop_deferred_card", "deferred_card",
     "adbreakdeferredcta", "instreamadidlewithbannerstate", "instream_legacy_banner_ad",
-    "unified_player_banner_ad", "banner_ad_", "floatingcta"
+    "unified_player_banner_ad", "banner_ad_", "floatingcta",
+    // Profile-timeline "Sponsored . Not connected to <friend>" markers.
+    // These fire when the sponsored data builder hook in HideProfileTimelineAds
+    // is bypassed (e.g. tree materialised from a prefetch cache before the hook
+    // installed) and give the late-list / story-pool sanitiser a second chance.
+    "is_non_connected_page_post", "non_connected_page_post",
+    "profile_ads_brand_safety", "profile_ad4ad",
 )
 
 val REELS_AD_SIGNAL_TOKENS = listOf(
