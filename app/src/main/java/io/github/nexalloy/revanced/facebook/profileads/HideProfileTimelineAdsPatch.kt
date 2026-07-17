@@ -7,53 +7,58 @@ import java.lang.reflect.Modifier
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * v9 — drop the whole profile-ad row at its Litho render root (X.NpY.A18).
+ * v10 — cover BOTH profile-ad render roots with one shared ad-marker.
  *
- * v8's stack trace nailed the profile-ad pipeline:
+ * v8 revealed the profile ad reaches X.2yR.A00 (the sponsored-unit oracle;
+ * true ⟺ "Sponsored · Not connected to <friend>") through TWO independent
+ * Litho render roots:
  *
- *   X.NpY.A18(CallerContext):3RU        ← render ROOT of the profile story unit
- *     └ X.NpY.AHy(26U):3XA              build layout
- *         └ X.2ug.A1G / X.2yL.A17 …     child components
- *             └ X.2yR.A00(2nv):Z        "is this a sponsored profile unit?"
+ *   branch 1:  X.NpY.A18(CallerContext):3RU
+ *                → NpY.AHy → 2yL.A17 → 2yL.A05 → 2wv.C0w → 2vF.A08 → 2yR.A01 → 2yR.A00
+ *   branch 2:  X.2zd.render(240,25F):3RU   (2zd ⟶ NpX ⟶ 1Kr KComponent)
+ *                → NpX.render → 2zd.render → 24M.A00 → 5IL.invoke → 2wv.C0w → 2vF.A08 → 2yR.A01 → 2yR.A00
  *
- * And X.2yR.A01 proved the semantics:
- *     if (X.2yR.A00(env)) buildSponsoredLabel() else return "";
- * so X.2yR.A00 == true  ⟺  this unit is the "Sponsored · Not connected to
- * <friend>" ad. (v8 forcing QOr.A05 / nulling QXL never fired — those are a
- * different CTA path — which is why only [2yR.A00] stacks appeared.)
+ * v9 only hooked branch 1 (NpY.A18); the "mụn lưng" ad happens to render via
+ * branch 2, so nothing dropped. v10 hooks the render ROOT of BOTH branches
+ * and shares a single ThreadLocal ad-marker driven by the real X.2yR.A00
+ * result. Whichever root is on the stack when X.2yR.A00 returns true has its
+ * rendered component replaced with null → the whole ad row collapses.
  *
- * Mechanism (ThreadLocal render window):
- *   1. X.NpY.A18  beforeHooked → push a fresh per-call flag (currentUnitIsAd
- *      = false) and remember we're inside a render.
- *   2. X.2yR.A00  afterHooked → if it returned true while we're inside an
- *      NpY.A18 render on this thread, set currentUnitIsAd = true. (We read the
- *      REAL return value, so genuine non-ad stories are never affected.)
- *   3. X.NpY.A18  afterHooked → if currentUnitIsAd, replace the rendered
- *      component with null. In Litho a null child collapses to zero size, so
- *      the entire ad row — image, caption, Shopee links, like/comment bar,
- *      and the "Được tài trợ · Chưa kết nối với" header — disappears.
+ * Render-window semantics (per root invocation, per thread):
+ *   root.before → renderDepth++ ; push marker=false for this frame
+ *   2yR.A00.after → if renderDepth>0 && result==true → mark current frame ad
+ *   root.after  → if this frame was marked ad → result=null ; renderDepth--
  *
- * Because the flag is per-NpY.A18-invocation and gated by the real X.2yR.A00
- * result, only the sponsored profile unit is dropped; ordinary posts on the
- * same timeline render normally.
+ * A depth counter (not a bool) handles the case where roots nest. Only the
+ * frame that actually contained the sponsored oracle result is dropped, so
+ * ordinary posts are never touched.
  *
- * The v6 news-feed edge skip is retained unchanged.
+ * v6 news-feed edge skip retained.
  */
 
 private const val LOG_TAG = "NexAlloy/HideProfileTimelineAds"
 
-private val insideNpyRender: ThreadLocal<Boolean> = ThreadLocal.withInitial { false }
-private val currentUnitIsAd: ThreadLocal<Boolean> = ThreadLocal.withInitial { false }
+// Stack of per-render-frame "is ad" flags on this thread.
+private val adFrameStack: ThreadLocal<ArrayDeque<Boolean>> =
+    ThreadLocal.withInitial { ArrayDeque<Boolean>() }
 private val inFeedAssembly: ThreadLocal<Boolean> = ThreadLocal.withInitial { false }
 private val sponsoredStories: MutableMap<Any, Boolean> =
     java.util.Collections.synchronizedMap(java.util.WeakHashMap())
 
 private val droppedRows = AtomicInteger(0)
-private val logBudget = AtomicInteger(30)
+private val logBudget = AtomicInteger(40)
+
+private fun markCurrentFrameAsAd() {
+    val st = adFrameStack.get()
+    if (st.isNotEmpty()) {
+        st.removeLast()
+        st.addLast(true)
+    }
+}
 
 val HideProfileTimelineAds = patch(
     name = "Hide profile-timeline ads",
-    description = "Drops the entire 'Sponsored · Not connected to <friend>' profile-ad row at its Litho render root.",
+    description = "Drops the whole 'Sponsored · Not connected to <friend>' profile-ad row across both Litho render roots.",
 ) {
     runCatching {
         val graphQLStory = classLoader.loadClass("com.facebook.graphql.model.GraphQLStory")
@@ -63,62 +68,65 @@ val HideProfileTimelineAds = patch(
             if (logBudget.getAndDecrement() > 0) XposedBridge.log("$LOG_TAG: $msg")
         }
 
-        // ── X.2yR.A00(2nv):Z — mark the current NpY render as an ad ─────────
+        // Shared render-root hook installer.
+        fun hookRenderRoot(className: String, methodName: String, expectedParams: Int) {
+            runCatching {
+                val cls = classLoader.loadClass(className)
+                val methods = cls.declaredMethods.filter { m ->
+                    m.name == methodName &&
+                        !m.returnType.isPrimitive && m.returnType != Void.TYPE &&
+                        (expectedParams < 0 || m.parameterCount == expectedParams)
+                }
+                if (methods.isEmpty()) {
+                    XposedBridge.log("$LOG_TAG: WARN $className.$methodName not found")
+                    return@runCatching
+                }
+                for (m in methods) {
+                    m.isAccessible = true
+                    XposedBridge.hookMethod(m, object : XC_MethodHook() {
+                        override fun beforeHookedMethod(param: MethodHookParam) {
+                            adFrameStack.get().addLast(false)
+                        }
+                        override fun afterHookedMethod(param: MethodHookParam) {
+                            val st = adFrameStack.get()
+                            val wasAd = if (st.isNotEmpty()) st.removeLast() else false
+                            if (wasAd) {
+                                param.result = null
+                                val n = droppedRows.incrementAndGet()
+                                if (n <= 10 || n % 20 == 0) {
+                                    XposedBridge.log("$LOG_TAG: dropped ad row at $className.$methodName (total=$n)")
+                                }
+                            }
+                        }
+                    })
+                    XposedBridge.log("$LOG_TAG: hooked render root $className.$methodName(${m.parameterCount})")
+                }
+            }.onFailure { log("$className.$methodName hook failed: ${it.message}") }
+        }
+
+        // ── X.2yR.A00 — the shared ad oracle ────────────────────────────────
         runCatching {
             val c2yR = classLoader.loadClass("X.2yR")
             val a00 = c2yR.declaredMethods.firstOrNull { m ->
-                m.name == "A00" && m.returnType == java.lang.Boolean.TYPE &&
-                    Modifier.isStatic(m.modifiers) && m.parameterCount == 1
-            } ?: c2yR.declaredMethods.firstOrNull { m ->
                 m.name == "A00" && m.returnType == java.lang.Boolean.TYPE
             }
             if (a00 != null) {
                 a00.isAccessible = true
                 XposedBridge.hookMethod(a00, object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
-                        if (insideNpyRender.get() == true && param.result == true) {
-                            currentUnitIsAd.set(true)
-                        }
+                        if (param.result == true) markCurrentFrameAsAd()
                     }
                 })
-                XposedBridge.log("$LOG_TAG: hooked X.2yR.A00 (ad marker)")
+                XposedBridge.log("$LOG_TAG: hooked X.2yR.A00 (shared ad oracle)")
             } else {
                 XposedBridge.log("$LOG_TAG: WARN X.2yR.A00 not found")
             }
         }.onFailure { log("2yR hook failed: ${it.message}") }
 
-        // ── X.NpY.A18(CallerContext):3RU — render root, drop if ad ──────────
-        runCatching {
-            val npy = classLoader.loadClass("X.NpY")
-            val a18 = npy.declaredMethods.firstOrNull { m ->
-                m.name == "A18" && m.parameterCount == 1 &&
-                    !m.returnType.isPrimitive && m.returnType != Void.TYPE
-            }
-            if (a18 != null) {
-                a18.isAccessible = true
-                XposedBridge.hookMethod(a18, object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        insideNpyRender.set(true)
-                        currentUnitIsAd.set(false)
-                    }
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        val wasAd = currentUnitIsAd.get() == true
-                        insideNpyRender.set(false)
-                        currentUnitIsAd.set(false)
-                        if (wasAd) {
-                            param.result = null
-                            val n = droppedRows.incrementAndGet()
-                            if (n <= 8 || n % 20 == 0) {
-                                XposedBridge.log("$LOG_TAG: dropped profile-ad row at NpY.A18 (total=$n)")
-                            }
-                        }
-                    }
-                })
-                XposedBridge.log("$LOG_TAG: hooked X.NpY.A18 (render-root drop)")
-            } else {
-                XposedBridge.log("$LOG_TAG: WARN X.NpY.A18 not found")
-            }
-        }.onFailure { log("NpY hook failed: ${it.message}") }
+        // ── Both render roots ───────────────────────────────────────────────
+        hookRenderRoot("X.NpY", "A18", 1)          // branch 1
+        hookRenderRoot("X.2zd", "render", -1)      // branch 2 (render(240,25F))
+        hookRenderRoot("X.NpX", "render", -1)      // branch 2 parent, belt-and-suspenders
 
         // ── Retain v6 news-feed edge skip ───────────────────────────────────
         runCatching {
