@@ -1,6 +1,8 @@
 package io.github.nexalloy.revanced.instagram.ads
 
+import io.github.nexalloy.morphe.findClassDirect
 import io.github.nexalloy.morphe.findMethodDirect
+import io.github.nexalloy.morphe.fingerprint
 
 val feedAcpContentInjectorFingerprint = findMethodDirect {
     findMethod {
@@ -147,6 +149,55 @@ val gridSponsoredPoolFingerprint = findMethodDirect {
     findMethod {
         matcher {
             usingStrings("GridSponsoredPoolItem(sponsoredContent=")
+        }
+    }.single()
+}
+
+val exploreGridAdsControllerClassFingerprint = findClassDirect {
+    findMethod {
+        matcher {
+            usingStrings("Ad Pod is not supported for Explore Grid Ads.")
+        }
+    }.single().declaredClass!!
+}
+
+val exploreGridAdsEligibilityFingerprint = fingerprint {
+    classFingerprint(exploreGridAdsControllerClassFingerprint)
+    returns("Z")
+    parameters("L", "Ljava/lang/Object;")
+}
+
+val exploreGridAdsDeliveryFingerprint = fingerprint {
+    classFingerprint(exploreGridAdsControllerClassFingerprint)
+    returns("Ljava/lang/Integer;")
+    parameters("L", "L", "L", "I")
+}
+
+val searchGridAdsControllerClassFingerprint = findClassDirect {
+    findMethod {
+        matcher {
+            usingStrings("Ad Pod is not supported for Search Grid Ads.")
+        }
+    }.single().declaredClass!!
+}
+
+val searchGridAdsEligibilityFingerprint = fingerprint {
+    classFingerprint(searchGridAdsControllerClassFingerprint)
+    returns("Z")
+    parameters("L", "Ljava/lang/Object;")
+}
+
+val searchGridAdsDeliveryFingerprint = fingerprint {
+    classFingerprint(searchGridAdsControllerClassFingerprint)
+    returns("Ljava/lang/Integer;")
+    parameters("L", "L", "L", "I")
+}
+
+val intentAwareAdGridBindFingerprint = findMethodDirect {
+    findMethod {
+        matcher {
+            returnType = "void"
+            usingStrings("IntentAwareAdGridCardViewBinder_bindAdImage")
         }
     }.single()
 }
