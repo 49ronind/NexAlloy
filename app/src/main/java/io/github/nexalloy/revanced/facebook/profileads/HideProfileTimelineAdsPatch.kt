@@ -7,67 +7,59 @@ import java.lang.reflect.Modifier
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * v4 — diagnostic + broaden render-side coverage.
+ * v5 — filter the ad OUT OF THE FEED LIST at the data-assembly chokepoint.
  *
- * v3 hooked X.9c8.A1G (TimelineStoryComponentSpec render) + X.CDx.A01
- * (component builder) to fall back to Facebook's own empty-component
- * path when a story was sponsored. Log showed "dropped total=1" during a
- * scroll where the user still saw the "Sponsored . Not connected to"
- * ad — so either:
+ * The v4 stack trace proved the ad never reaches the timeline RENDER spec
+ * (X.9c8). Instead the sponsored check runs deep inside feed-list assembly:
  *
- *   (a) the ad row is rendered by a DIFFERENT spec (not X.9c8), or
- *   (b) X.9c8.A1G returns null but Litho still renders the row from a
- *       cached/prior layout, or
- *   (c) something else swallows our null return.
+ *     X.2AL.A0G(...)                         public feed-conversion entry
+ *       └─ X.2AL.A03(...)  (1411 instrs)     the real loop
+ *            ├─ per edge: build X/2bP props
+ *            │    └─ X.2o6.A02(story)        isSponsoredStory  ← our A0N fires here
+ *            ├─ ImmutableList$Builder.add(edge)   ← [1155] edge is appended
+ *            └─ new X.3CC(... , edgeList=A05, ...) ← result holder
  *
- * v4:
- *   1. Keeps A0N record+null (kills "Được tài trợ" label + impression).
- *   2. Removes the A1G render-window + CDx-drop combo (didn't remove the
- *      row). Replaces it with a WeakHashMap of "story identity hash ->
- *      isSponsored", so we can also identify ads by object identity in
- *      code that runs AFTER A0N has been nulled.
- *   3. Adds a stack-inspection dump at each drop point so we can see
- *      exactly which spec / caller is rendering the surviving ad row.
- *   4. Hooks BOTH X.9c8.A1G and (if resolvable) the two most likely
- *      alternatives: X.C1t (SearchResultsSponsoredStoryComponentSpec-ish
- *      analogues) and any class whose name contains "MiniFeedStory" /
- *      "FeedStoryBasicComponent" in its Litho spec renderer.
- *      When any of these is called for a story we recorded as sponsored,
- *      the method's result is replaced with null; Facebook's own null
- *      guards produce an empty row.
+ * X.2AL.A03 appends EVERY converted edge to the output list regardless of
+ * the sponsored flag — that is why nulling getSponsoredData only removed the
+ * label, not the row. The fix is to drop sponsored edges from the resulting
+ * list.
  *
- * Please share the next Xposed log — the "sample stack" line printed on
- * the first few drops will tell us the exact class rendering the ad and
- * will let us pin the last hook needed.
+ * We hook the PUBLIC entry X.2AL.A0G (and, as a fallback, the Kotlin-named
+ * convertViewerToHomeStories$... method) and post-process its X.3CC result:
+ *   - field A05 (the first ImmutableList ctor arg, index 6) is the
+ *     ImmutableList<GraphQLFeedUnitEdge> of stories to display.
+ *   - for each edge, unwrap the node (edge.A03()/BI0()) to a GraphQLStory and
+ *     ask the ORIGINAL X.2o6.A02(story) whether it is sponsored. Because the
+ *     A0N (getSponsoredData) hook has ALREADY recorded every sponsored story's
+ *     identity into `sponsoredStories` during A03's run, we can also fall back
+ *     to identity lookup even after A0N has been nulled.
+ *   - rebuild the ImmutableList without sponsored edges and write it back to
+ *     A05 via reflection.
+ *
+ * Net effect: the "Sponsored · Not connected to <friend>" unit is gone from
+ * the profile feed entirely — no label, no body, no row.
+ *
+ * Diagnostics: logs each install; logs the first few filters with before/after
+ * counts.
  */
 
 private const val LOG_TAG = "NexAlloy/HideProfileTimelineAds"
 
-// Track story identity -> sponsored (identity keys so GC still works).
 private val sponsoredStories: MutableMap<Any, Boolean> =
     java.util.Collections.synchronizedMap(java.util.WeakHashMap())
 
-private val droppedCount = AtomicInteger(0)
-private val stackSamplesLeft = AtomicInteger(5)
-
-private fun sampleStack(from: String) {
-    if (stackSamplesLeft.getAndDecrement() <= 0) return
-    val t = Thread.currentThread().stackTrace
-    val summary = t.asSequence()
-        .drop(3)
-        .take(12)
-        .joinToString(" <- ") { "${it.className}.${it.methodName}" }
-    XposedBridge.log("$LOG_TAG: sample stack at $from: $summary")
-}
+private val filteredCount = AtomicInteger(0)
+private val logSamplesLeft = AtomicInteger(8)
 
 val HideProfileTimelineAds = patch(
     name = "Hide profile-timeline ads",
-    description = "Removes 'Sponsored · Not connected to <friend>' ads on friends' profile timelines (v4 diagnostic).",
+    description = "Removes 'Sponsored · Not connected to <friend>' ads by filtering sponsored edges out of the profile/feed story list.",
 ) {
     runCatching {
         val graphQLStory = classLoader.loadClass("com.facebook.graphql.model.GraphQLStory")
+        val feedUnitEdge = classLoader.loadClass("com.facebook.graphql.model.GraphQLFeedUnitEdge")
 
-        // ── 1. A0N — record identity + null ──────────────────────────────────
+        // ── 1. A0N — record identity of every sponsored story, then null it ──
         val getSponsoredData = graphQLStory.declaredMethods.firstOrNull { m ->
             m.name == "A0N" && m.parameterCount == 0 &&
                 !Modifier.isStatic(m.modifiers) && !m.isSynthetic
@@ -76,87 +68,115 @@ val HideProfileTimelineAds = patch(
             getSponsoredData.isAccessible = true
             XposedBridge.hookMethod(getSponsoredData, object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
-                    val story = param.thisObject ?: return
-                    val real = param.result
-                    if (real != null) {
+                    val story = param.thisObject
+                    if (story != null && param.result != null) {
                         sponsoredStories[story] = true
-                        // Log at most a handful of samples so we can see who's asking.
-                        sampleStack("A0N(sponsored)")
                     }
                     param.result = null
                 }
             })
             XposedBridge.log("$LOG_TAG: hooked GraphQLStory.A0N() (record identity + null)")
         } else {
-            XposedBridge.log("$LOG_TAG: WARN — could not resolve GraphQLStory.A0N()")
+            XposedBridge.log("$LOG_TAG: WARN — GraphQLStory.A0N() not resolved")
         }
 
-        // Helper — look through a hook's this + args for any GraphQLStory
-        // we've marked as sponsored, return true if found.
-        val isSponsoredContext: (XC_MethodHook.MethodHookParam) -> Boolean = fn@{ param ->
-            fun check(o: Any?): Boolean {
-                if (o == null) return false
-                if (graphQLStory.isInstance(o)) return sponsoredStories[o] == true
-                return false
+        // ── 2. Resolve the original isSponsoredStory oracle X.2o6.A02 ────────
+        // We call it reflectively during filtering. NOTE: it internally calls
+        // A0N which we've nulled, so it will now say "not sponsored". That's
+        // why we ALSO keep the identity map as the primary signal and use A02
+        // only as a secondary hint (for stories seen before our hook, etc.).
+        val isSponsoredStoryMethod: java.lang.reflect.Method? = runCatching {
+            val c = classLoader.loadClass("X.2o6")
+            c.declaredMethods.firstOrNull { m ->
+                Modifier.isStatic(m.modifiers) && m.parameterCount == 1 &&
+                    m.parameterTypes[0] == graphQLStory &&
+                    m.returnType == java.lang.Boolean.TYPE
+            }?.also { it.isAccessible = true }
+        }.getOrNull()
+
+        // node-unwrap getters on the edge: A03() and BI0() both return LX/3Jv;
+        val edgeNodeGetters = feedUnitEdge.declaredMethods.filter { m ->
+            m.parameterCount == 0 && !Modifier.isStatic(m.modifiers) &&
+                (m.name == "A03" || m.name == "BI0")
+        }.onEach { it.isAccessible = true }
+
+        fun edgeIsSponsored(edge: Any?): Boolean {
+            if (edge == null) return false
+            for (g in edgeNodeGetters) {
+                val node = runCatching { g.invoke(edge) }.getOrNull() ?: continue
+                if (graphQLStory.isInstance(node)) {
+                    // primary: identity recorded during A0N
+                    if (sponsoredStories[node] == true) return true
+                    // secondary: ask the oracle (may be null-blinded, best-effort)
+                    val viaOracle = isSponsoredStoryMethod?.let { mm ->
+                        runCatching { mm.invoke(null, node) as? Boolean }.getOrNull()
+                    } ?: false
+                    if (viaOracle) return true
+                }
             }
-            if (check(param.thisObject)) return@fn true
-            param.args?.forEach { if (check(it)) return@fn true }
-            false
+            return false
         }
 
-        // ── 2. Hook every timeline / feed story RENDER spec we can find. ─────
-        //
-        // The Litho render method on a Kotlin/Java ComponentSpec follows the
-        // shape:  public final LX/3RU; A1G(LX/3SA;)  — non-static, one arg
-        // (Litho component context), returns 3RU (a Component). Many specs
-        // in FB share this signature. We match by:
-        //   - class name pattern (obfuscated "X.9c8" style is fine; also
-        //     look at classes with English names containing Timeline/Feed/
-        //     Story ComponentSpec)
-        //   - method signature shape
-        // and null the result IF the current story is marked sponsored.
-        val candidateClasses = mutableListOf<Class<*>>()
-        listOf("X.9c8").forEach { n ->
-            runCatching { candidateClasses.add(classLoader.loadClass(n)) }
-        }
-        // Best-effort: try named specs from FB codebase (may not exist as-is).
-        listOf(
-            "com.facebook.timeline.rows.spec.TimelineStoryComponentSpec",
-            "com.facebook.feed.rows.sections.basiccomponent.FeedStoryBasicComponentSpec",
-            "com.facebook.feed.rows.sections.minifeed.MiniFeedStoryComponentSpec",
-        ).forEach { n ->
-            runCatching { candidateClasses.add(classLoader.loadClass(n)) }
-        }
-        XposedBridge.log("$LOG_TAG: render-spec candidates: ${candidateClasses.map { it.name }}")
+        // ── 3. Hook X.2AL feed-conversion methods, filter A05 edge list ─────
+        val feedConverter = classLoader.loadClass("X.2AL")
 
-        var renderHooks = 0
-        for (cls in candidateClasses) {
-            for (m in cls.declaredMethods) {
-                if (Modifier.isStatic(m.modifiers) || m.isSynthetic) continue
-                if (m.parameterCount != 1) continue
-                if (m.returnType.isPrimitive || m.returnType == Void.TYPE) continue
-                // Litho spec entry methods typically named A1G / onCreateLayout / render.
-                val n = m.name
-                if (n != "A1G" && n != "onCreateLayout" && n != "render") continue
-                m.isAccessible = true
-                XposedBridge.hookMethod(m, object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        if (isSponsoredContext(param)) {
-                            param.result = null
-                            val n2 = droppedCount.incrementAndGet()
-                            if (n2 <= 5 || n2 % 25 == 0) {
-                                XposedBridge.log("$LOG_TAG: null-ed render on ${cls.name}.${m.name} (total=$n2)")
-                                sampleStack("${cls.name}.${m.name}")
-                            }
-                        }
+        // The ImmutableList<GraphQLFeedUnitEdge> of display stories is ctor
+        // param 7, which maps to field A06 (verified from X.3CC.<init>). The
+        // other two ImmutableList fields (A05, A09) hold different data; we
+        // scan all three defensively — a list with no GraphQLFeedUnitEdge
+        // elements yields zero matches from edgeIsSponsored() and is left
+        // untouched, so this is safe even if the field mapping shifts.
+        val resultHolder = classLoader.loadClass("X.3CC")
+        val edgeListFields = listOf("A05", "A06", "A09").mapNotNull { fn ->
+            runCatching { resultHolder.getDeclaredField(fn).also { it.isAccessible = true } }.getOrNull()
+        }
+        if (edgeListFields.isEmpty()) {
+            XposedBridge.log("$LOG_TAG: WARN — no X.3CC ImmutableList fields found; cannot filter")
+        }
+
+        val immutableList = classLoader.loadClass("com.google.common.collect.ImmutableList")
+        val copyOf = immutableList.getMethod("copyOf", java.lang.Iterable::class.java)
+
+        val filterResult = fn@{ result: Any? ->
+            if (result == null) return@fn
+            if (!resultHolder.isInstance(result)) return@fn
+            for (field in edgeListFields) {
+                val list = runCatching { field.get(result) as? List<*> }.getOrNull() ?: continue
+                if (list.isEmpty()) continue
+                // quick type gate: only touch lists that actually contain edges
+                if (!feedUnitEdge.isInstance(list.first())) continue
+                val kept = ArrayList<Any?>(list.size)
+                var removed = 0
+                for (edge in list) {
+                    if (edgeIsSponsored(edge)) removed++ else kept.add(edge)
+                }
+                if (removed > 0) {
+                    val newList = copyOf.invoke(null, kept)
+                    field.set(result, newList)
+                    val total = filteredCount.addAndGet(removed)
+                    if (logSamplesLeft.getAndDecrement() > 0) {
+                        XposedBridge.log("$LOG_TAG: filtered $removed sponsored edge(s) from ${field.name} " +
+                            "(${list.size} -> ${kept.size}, total=$total)")
                     }
-                })
-                renderHooks++
-                XposedBridge.log("$LOG_TAG: hooked render spec ${cls.name}.${m.name}")
+                }
             }
         }
-        if (renderHooks == 0) {
-            XposedBridge.log("$LOG_TAG: WARN — no render-spec method hooked")
+
+        var hooks = 0
+        for (m in feedConverter.declaredMethods) {
+            if (m.returnType != resultHolder) continue
+            // A0G(...)LX/3CC;  and  convertViewerToHomeStories$...(...)LX/3CC;
+            m.isAccessible = true
+            XposedBridge.hookMethod(m, object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    runCatching { filterResult(param.result) }
+                }
+            })
+            hooks++
+            XposedBridge.log("$LOG_TAG: hooked X.2AL.${m.name}(...)->X.3CC (feed-list filter)")
+        }
+        if (hooks == 0) {
+            XposedBridge.log("$LOG_TAG: WARN — no X.2AL method returning X.3CC was hooked")
         }
     }.onFailure { e ->
         XposedBridge.log("$LOG_TAG: patch install failed: ${e.javaClass.name}: ${e.message}")
