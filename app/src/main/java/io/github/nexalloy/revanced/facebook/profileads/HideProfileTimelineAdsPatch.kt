@@ -7,58 +7,49 @@ import java.lang.reflect.Modifier
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * v10 — cover BOTH profile-ad render roots with one shared ad-marker.
+ * v11 — drop the ad at the STORY-UNIT builder only (no generic render hooks).
  *
- * v8 revealed the profile ad reaches X.2yR.A00 (the sponsored-unit oracle;
- * true ⟺ "Sponsored · Not connected to <friend>") through TWO independent
- * Litho render roots:
+ * v10 hooked X.NpX.render / X.2zd.render / X.NpY.A18 and returned null. Those
+ * are GENERIC Litho KComponents reused for comments, headers, attachments,
+ * etc., so nulling them shredded normal UI (broken comments/thumbnails in the
+ * screenshots) while the ad still showed. Those hooks are removed entirely.
  *
- *   branch 1:  X.NpY.A18(CallerContext):3RU
- *                → NpY.AHy → 2yL.A17 → 2yL.A05 → 2wv.C0w → 2vF.A08 → 2yR.A01 → 2yR.A00
- *   branch 2:  X.2zd.render(240,25F):3RU   (2zd ⟶ NpX ⟶ 1Kr KComponent)
- *                → NpX.render → 2zd.render → 24M.A00 → 5IL.invoke → 2wv.C0w → 2vF.A08 → 2yR.A01 → 2yR.A00
+ * Correct, surgical chokepoint:
  *
- * v9 only hooked branch 1 (NpY.A18); the "mụn lưng" ad happens to render via
- * branch 2, so nothing dropped. v10 hooks the render ROOT of BOTH branches
- * and shares a single ThreadLocal ad-marker driven by the real X.2yR.A00
- * result. Whichever root is on the stack when X.2yR.A00 returns true has its
- * rendered component replaced with null → the whole ad row collapses.
+ *   X.2ug.A00(Context, …, X.2nv env, …, GraphQLStory story, …, X.3SA):X.3RU
  *
- * Render-window semantics (per root invocation, per thread):
- *   root.before → renderDepth++ ; push marker=false for this frame
- *   2yR.A00.after → if renderDepth>0 && result==true → mark current frame ad
- *   root.after  → if this frame was marked ad → result=null ; renderDepth--
+ * This is the builder for a whole timeline STORY-UNIT component. It:
+ *   - takes the story's X.2nv environment AND the GraphQLStory directly,
+ *   - returns the unit's root component (X.3RU),
+ *   - is called ONLY for story units (X.2ug.A1G does `return A00(...)` with no
+ *     null-check), never for comments/headers/attachments.
  *
- * A depth counter (not a bool) handles the case where roots nest. Only the
- * frame that actually contained the sponsored oracle result is dropped, so
- * ordinary posts are never touched.
+ * We reuse Facebook's own oracle X.2yR.A00(X.2nv):boolean — proven by
+ * X.2yR.A01 to mean exactly "this is the Sponsored · Not connected to <friend>
+ * unit". In the hook we:
+ *   1. pull the X.2nv argument,
+ *   2. call the real X.2yR.A00(env),
+ *   3. if true, return null from X.2ug.A00 so the entire sponsored unit
+ *      collapses — while every non-sponsored story unit builds normally.
+ *
+ * Because we only ever null the story-unit builder for units the oracle flags,
+ * comments and other shared components are never affected.
  *
  * v6 news-feed edge skip retained.
  */
 
 private const val LOG_TAG = "NexAlloy/HideProfileTimelineAds"
 
-// Stack of per-render-frame "is ad" flags on this thread.
-private val adFrameStack: ThreadLocal<ArrayDeque<Boolean>> =
-    ThreadLocal.withInitial { ArrayDeque<Boolean>() }
 private val inFeedAssembly: ThreadLocal<Boolean> = ThreadLocal.withInitial { false }
 private val sponsoredStories: MutableMap<Any, Boolean> =
     java.util.Collections.synchronizedMap(java.util.WeakHashMap())
 
-private val droppedRows = AtomicInteger(0)
+private val droppedUnits = AtomicInteger(0)
 private val logBudget = AtomicInteger(40)
-
-private fun markCurrentFrameAsAd() {
-    val st = adFrameStack.get()
-    if (st.isNotEmpty()) {
-        st.removeLast()
-        st.addLast(true)
-    }
-}
 
 val HideProfileTimelineAds = patch(
     name = "Hide profile-timeline ads",
-    description = "Drops the whole 'Sponsored · Not connected to <friend>' profile-ad row across both Litho render roots.",
+    description = "Drops the 'Sponsored · Not connected to <friend>' unit at the story-unit builder (X.2ug.A00) using Facebook's own oracle.",
 ) {
     runCatching {
         val graphQLStory = classLoader.loadClass("com.facebook.graphql.model.GraphQLStory")
@@ -68,65 +59,55 @@ val HideProfileTimelineAds = patch(
             if (logBudget.getAndDecrement() > 0) XposedBridge.log("$LOG_TAG: $msg")
         }
 
-        // Shared render-root hook installer.
-        fun hookRenderRoot(className: String, methodName: String, expectedParams: Int) {
-            runCatching {
-                val cls = classLoader.loadClass(className)
-                val methods = cls.declaredMethods.filter { m ->
-                    m.name == methodName &&
-                        !m.returnType.isPrimitive && m.returnType != Void.TYPE &&
-                        (expectedParams < 0 || m.parameterCount == expectedParams)
-                }
-                if (methods.isEmpty()) {
-                    XposedBridge.log("$LOG_TAG: WARN $className.$methodName not found")
-                    return@runCatching
-                }
-                for (m in methods) {
-                    m.isAccessible = true
-                    XposedBridge.hookMethod(m, object : XC_MethodHook() {
-                        override fun beforeHookedMethod(param: MethodHookParam) {
-                            adFrameStack.get().addLast(false)
-                        }
-                        override fun afterHookedMethod(param: MethodHookParam) {
-                            val st = adFrameStack.get()
-                            val wasAd = if (st.isNotEmpty()) st.removeLast() else false
-                            if (wasAd) {
-                                param.result = null
-                                val n = droppedRows.incrementAndGet()
-                                if (n <= 10 || n % 20 == 0) {
-                                    XposedBridge.log("$LOG_TAG: dropped ad row at $className.$methodName (total=$n)")
-                                }
-                            }
-                        }
-                    })
-                    XposedBridge.log("$LOG_TAG: hooked render root $className.$methodName(${m.parameterCount})")
-                }
-            }.onFailure { log("$className.$methodName hook failed: ${it.message}") }
+        // Resolve the oracle X.2yR.A00(X.2nv):boolean and the X.2nv class.
+        val env2nv = runCatching { classLoader.loadClass("X.2nv") }.getOrNull()
+        val oracleA00: java.lang.reflect.Method? = runCatching {
+            val c = classLoader.loadClass("X.2yR")
+            c.declaredMethods.firstOrNull { m ->
+                m.name == "A00" && m.returnType == java.lang.Boolean.TYPE &&
+                    m.parameterCount == 1 &&
+                    (env2nv == null || m.parameterTypes[0] == env2nv)
+            }?.also { it.isAccessible = true }
+        }.getOrNull()
+        XposedBridge.log("$LOG_TAG: oracle X.2yR.A00 resolved=${oracleA00 != null}, X.2nv=${env2nv != null}")
+
+        fun isSponsoredEnv(env: Any?): Boolean {
+            if (env == null || oracleA00 == null) return false
+            return runCatching { oracleA00.invoke(null, env) as? Boolean }.getOrNull() == true
         }
 
-        // ── X.2yR.A00 — the shared ad oracle ────────────────────────────────
+        // ── X.2ug.A00 — story-unit builder; return null for the ad unit ─────
         runCatching {
-            val c2yR = classLoader.loadClass("X.2yR")
-            val a00 = c2yR.declaredMethods.firstOrNull { m ->
-                m.name == "A00" && m.returnType == java.lang.Boolean.TYPE
+            val c2ug = classLoader.loadClass("X.2ug")
+            val a00 = c2ug.declaredMethods.firstOrNull { m ->
+                m.name == "A00" && Modifier.isStatic(m.modifiers) &&
+                    !m.returnType.isPrimitive && m.returnType != Void.TYPE &&
+                    // must take both an X.2nv and a GraphQLStory somewhere
+                    m.parameterTypes.any { env2nv != null && it == env2nv } &&
+                    m.parameterTypes.any { it == graphQLStory }
             }
             if (a00 != null) {
                 a00.isAccessible = true
+                // find the X.2nv parameter index
+                val envIdx = a00.parameterTypes.indexOfFirst { env2nv != null && it == env2nv }
                 XposedBridge.hookMethod(a00, object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        if (param.result == true) markCurrentFrameAsAd()
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        val env = if (envIdx >= 0) param.args.getOrNull(envIdx) else null
+                        if (isSponsoredEnv(env)) {
+                            // Collapse the whole sponsored story unit.
+                            param.result = null
+                            val n = droppedUnits.incrementAndGet()
+                            if (n <= 10 || n % 20 == 0) {
+                                XposedBridge.log("$LOG_TAG: dropped sponsored story-unit at X.2ug.A00 (total=$n)")
+                            }
+                        }
                     }
                 })
-                XposedBridge.log("$LOG_TAG: hooked X.2yR.A00 (shared ad oracle)")
+                XposedBridge.log("$LOG_TAG: hooked X.2ug.A00 (story-unit builder, envIdx=$envIdx)")
             } else {
-                XposedBridge.log("$LOG_TAG: WARN X.2yR.A00 not found")
+                XposedBridge.log("$LOG_TAG: WARN X.2ug.A00 not found with expected shape")
             }
-        }.onFailure { log("2yR hook failed: ${it.message}") }
-
-        // ── Both render roots ───────────────────────────────────────────────
-        hookRenderRoot("X.NpY", "A18", 1)          // branch 1
-        hookRenderRoot("X.2zd", "render", -1)      // branch 2 (render(240,25F))
-        hookRenderRoot("X.NpX", "render", -1)      // branch 2 parent, belt-and-suspenders
+        }.onFailure { log("2ug hook failed: ${it.message}") }
 
         // ── Retain v6 news-feed edge skip ───────────────────────────────────
         runCatching {
