@@ -3,148 +3,205 @@ package io.github.nexalloy.revanced.facebook.profileads
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import io.github.nexalloy.patch
+import java.lang.reflect.Modifier
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Hide the "Sponsored . Not connected to <friend>" ad Facebook injects at the
+ * Hide the "Sponsored · Not connected to <friend>" ad Facebook injects at the
  * top of a friend's profile timeline (Vietnamese label:
  *     "Được tài trợ · Chưa kết nối với <tên bạn>").
  *
- * Strategy: hook GraphQLStory.getSponsoredData() (obfuscated: A0N()LX/3yW;)
- * and return null. Rationale:
+ * ─── Why the previous version wasn't enough ──────────────────────────────
  *
- *   - It is the single canonical getter for the "is this story an ad?"
- *     signal — verified by scanning all 20 DEX files: exactly one method
- *     with that shape exists.
- *   - LX/2o6;->A02(GraphQLStory) — the isSponsoredStory helper used by
- *     TimelineStoryComponentSpec, FeedUnitImpressionLoggerController, the
- *     StoryViewer ads root container, and 4 other consumers in classes6
- *     alone — literally does `return story.A0N() != null`. Null-ing here
- *     turns off every one of those consumers with zero further hooks.
- *   - The ad no longer renders "Sponsored" or "Chưa kết nối với" text,
- *     stops logging impressions to Facebook's ad servers, and — because
- *     downstream logic ignores it as a non-ad — is dropped by the story
- *     rank/dedupe pipeline instead of being force-inserted at the top.
+ * v1 hooked LX/R5p;->A01 (React JSON parser). Profile ads bypass that path
+ * entirely — they arrive as pre-materialised GraphQL trees.
  *
- * The previous version of this patch targeted LX/R5p;->A01, the *React*
- * Marketplace video-ads JSON parser. Profile-timeline ads never go through
- * that path (they arrive as pre-materialised GraphQL trees), which is why
- * users still saw the label after installing.
+ * v2 nulled GraphQLStory.getSponsoredData() and forced isSponsoredStory() to
+ * false. That killed the "Được tài trợ" LABEL and the impression logging —
+ * but did not remove the underlying post, so the ad body still rendered as
+ * an ordinary story. Users reported: "chỉ mất label được tài trợ thôi chứ
+ * quảng cáo vẫn còn".
  *
- * A single Xposed log line per session ("HideProfileTimelineAds: installed
- * on ...") plus a counter of intercepted calls (throttled to one line per
- * 500 hits) confirms the hook is live for diagnostics.
+ * Root cause: TimelineStoryComponentSpec (LX/9c8;->A1G) branches on
+ *     if (story.getSponsoredData() != null)  {
+ *         testKey = "sponsored_timeline_stories_test_key";
+ *     } else {
+ *         testKey = "timeline_stories_test_key";
+ *     }
+ *     component = LX/CDx;->A01(inputs);        // <-- SAME builder both sides
+ *     if (component == null)  return emptyComponent;   // <-- v16
+ *     return component;
+ * Both branches build the same visual component via LX/CDx;->A01 — the only
+ * thing the sponsored check flips is the analytics/test key. Once we null
+ * getSponsoredData() the branch flips to "regular", A01 still builds the
+ * component, and the ad remains visible.
+ *
+ * ─── v3 strategy: drop the whole component for sponsored stories ──────────
+ *
+ * We use the sponsored check itself as our signal:
+ *   1. On EACH call to GraphQLStory.getSponsoredData(), record the real
+ *      answer in a ThreadLocal — TRUE if the wrapper is non-null, FALSE
+ *      otherwise — THEN return null (kills label + impression logging).
+ *   2. Inside LX/9c8;->A1G (TimelineStoryComponentSpec render), our A0N
+ *      hook fires once with the ThreadLocal set to TRUE if the story is
+ *      an ad; A1G immediately branches to the "regular" path and calls
+ *      LX/CDx;->A01(...) to actually build the component.
+ *   3. We hook LX/CDx;->A01 and, if the ThreadLocal says the current story
+ *      is sponsored, we return null. A1G already has a null-check on the
+ *      builder result — it falls through to  `return v16;` (the empty
+ *      component) and logs "Creating a Stories in Profile Timeline unit
+ *      not successful", which is Facebook's own safe path for a failed
+ *      component build. The row simply doesn't render.
+ *   4. We wrap A1G with beforeHooked=reset / afterHooked=cleanup so the
+ *      ThreadLocal never leaks past a render call.
+ *
+ * This is surgical: only calls of LX/CDx;->A01 that happen inside the
+ * profile-timeline render path for a sponsored story are neutralised.
+ * Non-sponsored stories on the same profile — real posts from your friend
+ * — are untouched.
+ *
+ * ─── Diagnostic ──────────────────────────────────────────────────────────
+ *
+ * Each installed hook logs once at install; the drop counter reports every
+ * 50 hidden ads. Look for "NexAlloy/HideProfileTimelineAds" in Xposed log.
  */
 
 private const val LOG_TAG = "NexAlloy/HideProfileTimelineAds"
-private val getSponsoredDataHitCount = AtomicInteger(0)
+private val currentStoryIsSponsored: ThreadLocal<Boolean> = ThreadLocal.withInitial { false }
+private val insideTimelineRender: ThreadLocal<Boolean> = ThreadLocal.withInitial { false }
+private val droppedAdCount = AtomicInteger(0)
 
 val HideProfileTimelineAds = patch(
     name = "Hide profile-timeline ads",
-    description = "Removes 'Sponsored · Not connected to <friend>' ads on friends' profile timelines by nulling GraphQLStory.getSponsoredData().",
+    description = "Removes 'Sponsored · Not connected to <friend>' ads (label AND body) on friends' profile timelines.",
 ) {
     runCatching {
         val graphQLStory = classLoader.loadClass("com.facebook.graphql.model.GraphQLStory")
 
-        // Resolve getSponsoredData() by RETURN TYPE, not by obfuscated name.
-        // Signature at the time of writing: A0N()LX/3yW; — the field wrapper
-        // type LX/3yW; is a TreeJNI subclass. We match by:
-        //   (a) zero parameters
-        //   (b) non-static, public
-        //   (c) return type whose simple name begins with "TreeJNI" OR whose
-        //       binary name is short/obfuscated (X.* pattern) — i.e. not a
-        //       standard java.* or facebook.graphql.model.* class.
-        // This survives the annual FB obfuscation reshuffle without needing
-        // a DexKit fingerprint.
-        val candidates = graphQLStory.declaredMethods.filter { m ->
-            m.parameterCount == 0 &&
-                !java.lang.reflect.Modifier.isStatic(m.modifiers) &&
-                !m.isSynthetic &&
-                run {
-                    val rt = m.returnType
-                    if (rt.isPrimitive || rt == Void.TYPE) return@run false
-                    val n = rt.name
-                    // FB's obfuscated inner types look like "X.3yW" / "X.C1a" —
-                    // the top-level package is a single-letter directory.
-                    // TreeJNI subclasses are the only inner-package types that
-                    // GraphQLStory getters return; everything else on this class
-                    // is either primitive, String, ImmutableList, or a public
-                    // graphql.model.* class.
-                    n.startsWith("X.") ||
-                        (rt.superclass?.name?.contains("TreeJNI") == true) ||
-                        n.contains("SponsoredData", ignoreCase = true)
-                }
-        }
-
-        // Among X.*-returning zero-arg getters there are several (page, feedback,
-        // etc.). The sponsored one is the ONLY one whose return-type class is
-        // also reachable from getSponsoredData semantically. We can't tell them
-        // apart by name alone, so we hook them ALL to return null ONLY when the
-        // stack shows we're being called from the isSponsoredStory helper
-        // (LX/2o6;->A02) or from a *SponsoredLabel* / *SponsoredImpression*
-        // consumer. This is precise: legitimate non-ad callers of other X.*
-        // getters (page info, feedback) will not appear in those stacks.
+        // ── 1. GraphQLStory.getSponsoredData() — record + null out ──────────
         //
-        // BUT — a simpler and more reliable path: hook LX/2o6;->A02 directly to
-        // return false. That method is a single guard used ONLY for ad
-        // suppression logic. Forcing it to false does NOT hide a non-ad story;
-        // it merely tells FB "this story is not sponsored", which for genuine
-        // non-ads is already true.
-
-        // Step 1: force isSponsoredStory() to false.
-        // (LX/2o6;->A02 IS the ad-guard used throughout classes6.)
-        runCatching {
-            val sponsoredCheckClass = classLoader.loadClass("X.2o6")
-            sponsoredCheckClass.declaredMethods.firstOrNull { m ->
-                java.lang.reflect.Modifier.isStatic(m.modifiers) &&
-                    m.parameterCount == 1 &&
-                    m.parameterTypes[0] == graphQLStory &&
-                    m.returnType == java.lang.Boolean.TYPE
-            }?.let { m ->
-                m.isAccessible = true
-                XposedBridge.hookMethod(m, object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        val hits = getSponsoredDataHitCount.incrementAndGet()
-                        if (hits == 1 || hits % 500 == 0) {
-                            XposedBridge.log("$LOG_TAG: isSponsoredStory-> false (hits=$hits)")
-                        }
-                        param.result = false
-                    }
-                })
-                XposedBridge.log("$LOG_TAG: hooked ${m.declaringClass.name}.${m.name} " +
-                    "(isSponsoredStory guard)")
-            } ?: XposedBridge.log("$LOG_TAG: X.2o6 present but no (GraphQLStory)Z guard found")
-        }.onFailure { e ->
-            XposedBridge.log("$LOG_TAG: could not load X.2o6 (${e.javaClass.simpleName}: ${e.message}) — " +
-                "class letter/index may have shifted; falling through to A0N hook")
-        }
-
-        // Step 2: also null the underlying getSponsoredData() so consumers
-        // that bypass the X.2o6 guard (e.g. StoryOverlaySponsoredLabel which
-        // calls story.A0N() directly) see no sponsored payload either.
-        // We identify A0N by return-shape: the only zero-arg non-static
-        // method whose return type is an X.* obfuscated TreeJNI wrapper AND
-        // where the field-name-hash annotation (if present) matches
-        // "sponsored_data". As a robust proxy we look for a method named
-        // exactly "A0N" first (current build), then fall back to structural.
+        // Method obfuscated as A0N() at time of writing. Resolve by exact
+        // name first, then structurally as the sole zero-arg non-static
+        // getter returning an X.*-package (obfuscated TreeJNI) type.
         val getSponsoredData = graphQLStory.declaredMethods.firstOrNull { m ->
             m.name == "A0N" && m.parameterCount == 0 &&
-                !java.lang.reflect.Modifier.isStatic(m.modifiers)
-        } ?: candidates.firstOrNull()
-
-        if (getSponsoredData != null) {
-            getSponsoredData.isAccessible = true
-            XposedBridge.hookMethod(getSponsoredData, object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    param.result = null
+                !Modifier.isStatic(m.modifiers) && !m.isSynthetic
+        } ?: graphQLStory.declaredMethods.firstOrNull { m ->
+            m.parameterCount == 0 &&
+                !Modifier.isStatic(m.modifiers) && !m.isSynthetic &&
+                run {
+                    val rt = m.returnType
+                    !rt.isPrimitive && rt != Void.TYPE && rt.name.startsWith("X.")
                 }
-            })
-            XposedBridge.log("$LOG_TAG: hooked GraphQLStory.${getSponsoredData.name}() " +
-                "(getSponsoredData chokepoint)")
+        }
+
+        if (getSponsoredData == null) {
+            XposedBridge.log("$LOG_TAG: could not resolve GraphQLStory.getSponsoredData — bailing")
+            return@runCatching
+        }
+
+        getSponsoredData.isAccessible = true
+        XposedBridge.hookMethod(getSponsoredData, object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                // We only care about calls that happen inside the profile-
+                // timeline render window; outside of it we still null out to
+                // suppress labels + impression logging everywhere else, but
+                // we don't touch the ThreadLocal.
+                if (insideTimelineRender.get() == true) {
+                    val realResult = param.result
+                    if (realResult != null) {
+                        currentStoryIsSponsored.set(true)
+                    }
+                }
+                // Always null — kills sponsored label, impression logging,
+                // "sponsored_data" test key branch, and every other consumer
+                // that only cares whether the wrapper is present.
+                param.result = null
+            }
+        })
+        XposedBridge.log("$LOG_TAG: hooked GraphQLStory.${getSponsoredData.name}() (record+null)")
+
+        // ── 2. LX/9c8;->A1G — timeline render entry point ────────────────────
+        //
+        // Set the render window so step 1's ThreadLocal recording only
+        // captures A0N calls that happen for the story being rendered right
+        // now. Reset both flags on the way out — no state leaks across
+        // component builds.
+        val timelineComponentSpec = runCatching {
+            classLoader.loadClass("X.9c8")
+        }.getOrNull()
+
+        if (timelineComponentSpec != null) {
+            // A1G(LX/3SA;)LX/3RU; — one arg, one reference return type,
+            // non-static, public final.
+            val a1g = timelineComponentSpec.declaredMethods.firstOrNull { m ->
+                m.name == "A1G" && m.parameterCount == 1 &&
+                    !Modifier.isStatic(m.modifiers) && !m.isSynthetic &&
+                    m.returnType != Void.TYPE && !m.returnType.isPrimitive
+            }
+            if (a1g != null) {
+                a1g.isAccessible = true
+                XposedBridge.hookMethod(a1g, object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        insideTimelineRender.set(true)
+                        currentStoryIsSponsored.set(false)
+                    }
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val wasAd = currentStoryIsSponsored.get() == true
+                        insideTimelineRender.set(false)
+                        currentStoryIsSponsored.set(false)
+                        if (wasAd) {
+                            val n = droppedAdCount.incrementAndGet()
+                            if (n == 1 || n % 50 == 0) {
+                                XposedBridge.log("$LOG_TAG: dropped profile-timeline ad (total=$n)")
+                            }
+                        }
+                    }
+                })
+                XposedBridge.log("$LOG_TAG: hooked X.9c8.A1G (timeline render window)")
+            } else {
+                XposedBridge.log("$LOG_TAG: X.9c8 loaded but A1G not found; render window disabled")
+            }
         } else {
-            XposedBridge.log("$LOG_TAG: could not resolve getSponsoredData on GraphQLStory " +
-                "(declaredMethods=${graphQLStory.declaredMethods.size}, " +
-                "candidates=${candidates.size}) — profile ads may still appear")
+            XposedBridge.log("$LOG_TAG: X.9c8 not loadable — class index has shifted; skipping window")
+        }
+
+        // ── 3. LX/CDx;->A01 — the actual builder, neutralise for ads ────────
+        //
+        // Signature: A01(LX/6Gl; LX/3Jv; LX/3SA;) LX/3RU;
+        // We return null when the ThreadLocal marks the current story as
+        // sponsored. A1G already handles null with:
+        //     if (component != null)  return component;
+        //     Log.e("timeline_story_component",
+        //           "Creating a Stories in Profile Timeline unit not successful");
+        //     return emptyComponent;                    // <- this path runs
+        val timelineBuilder = runCatching {
+            classLoader.loadClass("X.CDx")
+        }.getOrNull()
+
+        if (timelineBuilder != null) {
+            val a01 = timelineBuilder.declaredMethods.firstOrNull { m ->
+                m.name == "A01" && m.parameterCount == 3 &&
+                    !Modifier.isStatic(m.modifiers) && !m.isSynthetic
+            }
+            if (a01 != null) {
+                a01.isAccessible = true
+                XposedBridge.hookMethod(a01, object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        if (currentStoryIsSponsored.get() == true) {
+                            // A1G's own null-check will fall through to the
+                            // empty-component fallback — Facebook's own safe
+                            // path, not something we've fabricated.
+                            param.result = null
+                        }
+                    }
+                })
+                XposedBridge.log("$LOG_TAG: hooked X.CDx.A01 (drop-ad-body chokepoint)")
+            } else {
+                XposedBridge.log("$LOG_TAG: X.CDx loaded but A01 not found")
+            }
+        } else {
+            XposedBridge.log("$LOG_TAG: X.CDx not loadable — class index has shifted")
         }
     }.onFailure { e ->
         XposedBridge.log("$LOG_TAG: patch install failed: ${e.javaClass.name}: ${e.message}")
