@@ -7,7 +7,7 @@ import java.net.URI
 
 val BlockNetwork = patch(
     name = "Block ads and analytics",
-    description = "Blocks ads and analytics network requests for Feed, Reels, Stories, and Explore.",
+    description = "Blocks ads and analytics network requests for Feed, Reels, Stories, Explore, and Search.",
 ) {
     ::networkInterceptorFingerprint.hookMethod {
         before { param ->
@@ -34,18 +34,14 @@ private fun shouldBlock(host: String, path: String): Boolean {
     if (path.contains("/api/v1/async_ads/")) return true
     if (path.contains("/feed/injected_reels_media/")) return true
     if (path.contains("/profile_ads/get_profile_ads/")) return true
-
-    // ── Reels/Clips ads  ──
     if (path.contains("/clips_viewer_feed_sa_multi_ads_watch_and_browse")) return true
-
-    // ── Ads event reporting ──
     if (path.contains("/async_ads_event")) return true
-
-    // ── Graph API hosts (ad targeting, data) ──
+    if (path.contains("/discover/injected_chaining_explore_media/")) return true
+    if (path.contains("/discover/chaining_experience_contextual_ads/")) return true
+    if (path.contains("/discover/chaining_experience_notification_ads/")) return true
+    if (path.contains("/discover/feed_style_feed_of_ads/")) return true
     if (host.contains("graph.instagram.com")) return true
     if (host.contains("graph.facebook.com")) return true
-
-    // ── Analytics / tracking ──
     if (path.contains("/logging_client_events")) return true
 
     return false
