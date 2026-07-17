@@ -25,6 +25,11 @@ val HideAds = patch(
     runCatching { ::sponsoredStoriesLikeButtonFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
     runCatching { ::paidPartnershipLabelFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
     runCatching { ::gridSponsoredPoolFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    runCatching { ::exploreGridAdsEligibilityFingerprint.hookMethod(XC_MethodReplacement.returnConstant(false)) }
+    runCatching { ::searchGridAdsEligibilityFingerprint.hookMethod(XC_MethodReplacement.returnConstant(false)) }
+    runCatching { ::exploreGridAdsDeliveryFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    runCatching { ::searchGridAdsDeliveryFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
+    runCatching { ::intentAwareAdGridBindFingerprint.hookMethod(XC_MethodReplacement.DO_NOTHING) }
     runCatching {
         ::clipsAdAddItemFingerprint.hookMethod {
             before { param ->
