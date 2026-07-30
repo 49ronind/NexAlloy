@@ -21,7 +21,7 @@
 ## Downloads
 - **Release build**: [Download](https://github.com/NexAlloy/NexAlloy/releases/latest)
 - **Nightly build**: [Download](https://nightly.link/NexAlloy/NexAlloy/workflows/android/main)
-
+- **NONROOT build**: [Download](https://github.com/gnadgnaoh/Revanced-And-Revanced-Extended-Non-Root/releases)
 <sub>If you've joined the YouTube beta program, please try the nightly build before reporting an issue.</sub>
 
 ## Patches
