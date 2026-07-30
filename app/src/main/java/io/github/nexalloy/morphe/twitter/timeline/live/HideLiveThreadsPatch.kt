@@ -18,11 +18,7 @@ val HideLiveThreads = patch(
     HideLiveThreadsFingerprint.hookMethod {
         before { param ->
             val instance = param.thisObject ?: return@before
-            runCatching {
                 instance.setObjectField(field.name, null)
-            }.onFailure { e ->
-                Logger.printException({ "[Twitter] HideLiveThreads: failed to set field" }, e)
-            }
         }
     }
 }
