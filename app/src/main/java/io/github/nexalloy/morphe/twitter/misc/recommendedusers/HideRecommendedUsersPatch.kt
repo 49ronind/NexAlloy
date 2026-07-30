@@ -11,12 +11,9 @@ val HideRecommendedUsers = patch(
     HideRecommendedUsersFingerprint.hookMethod {
         before { param ->
             val instance = param.thisObject ?: return@before
-            runCatching {
                 instance.setObjectField("d", null)
-            }.onFailure { e ->
-                Logger.printException({ "[Twitter] HideRecommendedUsers: failed to set field" }, e)
-            }
         }
     }
 }
+
 
