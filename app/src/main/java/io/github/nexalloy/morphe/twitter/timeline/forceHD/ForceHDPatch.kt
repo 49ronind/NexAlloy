@@ -6,17 +6,11 @@ val ForceHD = patch(
     name = "Enable force HD videos",
     description = "Videos will be played in the highest quality available.",
 ) {
-    val videoListField = ::playerSupportVideoListFieldResolved.field.also { it.isAccessible = true }
-
     PlayerSupportFingerprint.hookMethod {
         before { param ->
-            for (arg in param.args) {
-                if (arg == null) continue
-                val currentList = runCatching { videoListField.get(arg) as? List<*> }.getOrNull()
-                    ?: continue
-                runCatching { videoListField.set(arg, timelineVideos(currentList)) }
-                break
-            }
+            val currentList = param.args.getOrNull(0) as? List<*> ?: return@before
+            param.args[0] = timelineVideos(currentList)
         }
     }
 }
+
