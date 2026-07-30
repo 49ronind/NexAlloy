@@ -39,8 +39,6 @@ const val GRAPHQL_QUICK_PROMO_FEED_UNIT_CLASS =
     "com.facebook.graphql.model.GraphQLQuickPromotionNativeTemplateFeedUnit"
 const val AUDIENCE_NETWORK_ACTIVITY_CLASS        = "com.facebook.ads.AudienceNetworkActivity"
 const val AUDIENCE_NETWORK_REMOTE_ACTIVITY_CLASS = "com.facebook.ads.internal.ipc.AudienceNetworkRemoteActivity"
-// FB 571+ : AudienceNetworkActivity is gone from the APK; this is its replacement.
-const val AUDIENCE_NETWORK_EXPORTED_ACTIVITY_CLASS = "com.facebook.ads.internal.ipc.AudienceNetworkExportedActivity"
 const val NEKO_PLAYABLE_ACTIVITY_CLASS           = "com.facebook.neko.playables.activity.NekoPlayableAdActivity"
 
 const val GAME_AD_REJECTION_MESSAGE   = "Game ad request blocked"
@@ -58,18 +56,11 @@ val GAME_AD_AUTOFIX_MESSAGE_TYPES = setOf("loadbanneradasync", "hidebanneradasyn
 
 val GAME_AD_UNAVAILABLE_MESSAGE_TYPES = setOf("getrewardedvideoasync", "getrewardedinterstitialasync")
 
-// All known AudienceNetwork activity classes (excludes NekoPlayableAdActivity, which
-// is a separate playable-ad surface, not an Audience Network one). Kept as its own
-// set — rather than inlined at each call site — so shouldBlockGameAdActivityLaunch
-// and handleGameAdActivity can't silently drift out of sync with each other or with
-// GAME_AD_ACTIVITY_CLASS_NAMES the next time Facebook renames/adds an activity class.
-val AUDIENCE_NETWORK_ACTIVITY_CLASS_NAMES = setOf(
+val GAME_AD_ACTIVITY_CLASS_NAMES = setOf(
     AUDIENCE_NETWORK_ACTIVITY_CLASS,
     AUDIENCE_NETWORK_REMOTE_ACTIVITY_CLASS,
-    AUDIENCE_NETWORK_EXPORTED_ACTIVITY_CLASS
+    NEKO_PLAYABLE_ACTIVITY_CLASS
 )
-
-val GAME_AD_ACTIVITY_CLASS_NAMES = AUDIENCE_NETWORK_ACTIVITY_CLASS_NAMES + NEKO_PLAYABLE_ACTIVITY_CLASS
 
 val HARD_BLOCKED_GAME_AD_ACTIVITY_CLASS_NAMES = setOf(NEKO_PLAYABLE_ACTIVITY_CLASS)
 
@@ -81,8 +72,78 @@ val AUDIENCE_NETWORK_REWARD_COMPLETION_METHOD_NAMES = setOf(
 val AUDIENCE_NETWORK_CLOSE_LISTENER_CLASS_NAMES = setOf("X.mGv", "X.mGo", "p000X.mGv", "p000X.mGo")
 
 val FEED_AD_CATEGORY_VALUES          = setOf("SPONSORED", "PROMOTION", "AD", "ADVERTISEMENT", "BANNER", "ENGAGEMENT_QP")
+val FEED_COLLECTION_AD_CATEGORY_VALUES = setOf("SPONSORED", "PROMOTION", "AD", "ADVERTISEMENT", "BANNER")
 val FEED_SAFE_CONTAINER_CATEGORY_VALUES = setOf("FB_SHORTS", "MULTI_FB_STORIES_TRAY")
 
+// ─── FB 571 hardcoded-class fast-path targets ────────────────────────────────
+// Upstream (installFacebook571FeedSourceFastPath / FeedComponentGuard) resolves these
+// obfuscated feed classes by NAME via Class.forName rather than DexKit — they change
+// per Facebook build but are pinned to the fb571 line this port syncs against. The
+// hooks below rewrite/skip sponsored edges as early as the decoded feed response and
+// the Litho component render, complementing the DexKit-resolved CSR/pool hooks.
+
+/** Item-contract interfaces the FeedItemInspector reflects over to read edge/category. */
+val FB571_FEED_ITEM_CONTRACT_CLASSES = listOf("X.3YX", "X.3Xk")
+
+data class NamedHookTarget(val className: String, val methodName: String)
+
+data class FeedComponentGuardTarget(
+    val wrapperClassName: String,
+    val componentClassName: String,
+    val renderParameterCount: Int
+)
+
+data class FeedSectionTarget(
+    val className: String,
+    val methodName: String,
+    val listFieldName: String
+)
+
+/** Decoded feed-response CSR filter classes (return a result WRAPPER around the list). */
+val FB571_FEED_CSR_TARGETS = listOf(
+    NamedHookTarget("X.21p", "Ani"),
+    NamedHookTarget("X.baJ", "Ani"),
+    NamedHookTarget("X.baK", "Ani"),
+    NamedHookTarget("X.211", "Ao4"),
+    NamedHookTarget("X.bB9", "Ao4"),
+    NamedHookTarget("X.bBA", "Ao4")
+)
+
+/** Decoded network feed sanitiser targets (first ImmutableList param). */
+val FB571_NETWORK_FEED_TARGETS = listOf(
+    NamedHookTarget("X.1fM", "A0B"),
+    NamedHookTarget("X.1eY", "A0B")
+)
+
+/** Sponsored-pool add targets — boolean(1-arg) that gets forced to false. */
+val FB571_SPONSORED_POOL_TARGETS = listOf(
+    NamedHookTarget("X.21O", "A03"),
+    NamedHookTarget("X.20a", "A03")
+)
+
+/** Litho feed component guard: (wrapper, component, renderParamCount). */
+val FB571_FEED_COMPONENT_TARGETS = listOf(
+    FeedComponentGuardTarget("X.2Oc", "X.2OT", 1)
+)
+
+/** Cached feed section sanitiser: (class, method, listField). */
+val FB571_FEED_SECTION_TARGETS = listOf(
+    FeedSectionTarget("X.2mm", "A3F", "A06")
+)
+
+/** addNewEdgeToCollection filter: (class, method). */
+val FB571_FEED_COLLECTION_TARGETS = listOf(
+    NamedHookTarget("X.1vr", "addNewEdgeToCollection")
+)
+
+/** Story-ad source provider classes resolved by name on the fast path. */
+val FB571_STORY_AD_SOURCE_CLASSES = listOf(
+    "X.9xH", "X.A4W", "X.9zi", "X.A4w", "X.CNo", "X.KJw"
+)
+
+// Upstream gate: the BROAD feed/reel-CTA text-marker fallbacks below are disabled by
+// default in FacebookAppAdsRemover (higher false-positive risk than the explicit-card
+// detector). The explicit "Hide ad" + AdChoices card detector always stays on.
 const val ENABLE_FEED_UI_MARKER_FALLBACKS = false
 
 val FEED_SURFACE_AD_MARKER_TOKENS = listOf(
@@ -137,6 +198,13 @@ private val gameAdServiceDispatchHooksInstalled = AtomicInteger(0)
 private val gameAdSurfaceHooksInstalled        = AtomicInteger(0)
 private val audienceNetworkRewardHooksInstalled = AtomicInteger(0)
 private val audienceNetworkRewardClassesHooked  = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+private val storyAdProviderClassesHooked        = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+private val feedCsrMethodsHooked                 = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+private val lateFeedMethodsHooked                = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+private val sponsoredPoolMethodsHooked           = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+private val feedComponentMethodsHooked           = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+private val feedSectionMethodsHooked             = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+private val feedCollectionMethodsHooked          = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 private val audienceNetworkRewardAdListeners    = Collections.synchronizedMap(WeakHashMap<Any, Any>())
 private val scheduledGameAdActivityCloses       = Collections.synchronizedMap(WeakHashMap<Activity, Long>())
 private val scheduledAudienceNetworkExitViews   = Collections.synchronizedMap(WeakHashMap<View, Long>())
@@ -170,37 +238,6 @@ data class GameAdPromiseSnapshot(
     val timestampMs: Long
 )
 
-// ─── Safe reflection helpers ─────────────────────────────────────────────────
-//
-// Every reflective read below can blow up on Facebook's GraphQL tree models:
-//
-//  * IllegalArgumentException "Expected receiver of type X.3Xk, but got
-//    com.facebook.graphql.model.GraphQLFeedUnitEdge" — an accessor resolved once
-//    from a contract interface then applied to an unrelated object.
-//  * NullPointerException from TreeJNI.toExpensiveHumanReadableDebugString —
-//    TreeJNI.toString() on a tree whose native pointer has been freed.
-//  * X.1ef "Deserializer is null while inflating edge" — inflating an edge
-//    outside a valid context.
-//
-// None of these are recoverable or interesting; swallow them so the inspectors
-// keep walking instead of aborting the hook.
-
-/** toString() that never throws (TreeJNI.toString() goes to native code). */
-internal fun safeToString(value: Any?): String? =
-    try { value?.toString() } catch (_: Throwable) { null }
-
-/** Field read guarded by a receiver-type check. */
-internal fun safeGet(field: Field, target: Any): Any? =
-    try {
-        if (field.declaringClass.isInstance(target)) field.get(target) else null
-    } catch (_: Throwable) { null }
-
-/** No-arg invoke guarded by a receiver-type check. */
-internal fun safeInvoke(method: Method, target: Any): Any? =
-    try {
-        if (method.declaringClass.isInstance(target)) method.invoke(target) else null
-    } catch (_: Throwable) { null }
-
 // ─── AdStoryInspector ─────────────────────────────────────────────────────────
 
 class AdStoryInspector(private val adKindEnumClass: Class<*>) {
@@ -219,8 +256,8 @@ class AdStoryInspector(private val adKindEnumClass: Class<*>) {
         if (seen.put(value, true) != null) return false
         if (value is Iterable<*>) { var n = 0; for (i in value) { if (containsAdKind(i, depth+1, seen)) return true; if (++n >= 8) break } }
         if (type.isArray) { val a = value as? Array<*>; if (a != null) { var n = 0; for (i in a) { if (containsAdKind(i, depth+1, seen)) return true; if (++n >= 8) break } } }
-        for (m in enumMethodsFor(type)) if (isAdKind(safeInvoke(m, value))) return true
-        for (f in fieldsFor(type)) if (containsAdKind(safeGet(f, value), depth+1, seen)) return true
+        for (m in enumMethodsFor(type)) if (isAdKind(runCatching { m.invoke(value) }.getOrNull())) return true
+        for (f in fieldsFor(type)) if (containsAdKind(runCatching { f.get(value) }.getOrNull(), depth+1, seen)) return true
         return false
     }
 
@@ -234,9 +271,9 @@ class AdStoryInspector(private val adKindEnumClass: Class<*>) {
         if (seen.put(value, true) != null) return false
         if (value is Iterable<*>) { var n = 0; for (i in value) { if (containsReelsAdSignal(i, depth+1, seen)) return true; if (++n >= 8) break } }
         if (type.isArray) { val a = value as? Array<*>; if (a != null) { var n = 0; for (i in a) { if (containsReelsAdSignal(i, depth+1, seen)) return true; if (++n >= 8) break } } }
-        if (isReelsAdSignalText(safeToString(value))) return true
-        for (m in stringMethodsFor(type)) if (isReelsAdSignalText(safeInvoke(m, value) as? String)) return true
-        for (f in fieldsFor(type)) if (containsReelsAdSignal(safeGet(f, value), depth+1, seen)) return true
+        if (isReelsAdSignalText(runCatching { value.toString() }.getOrNull())) return true
+        for (m in stringMethodsFor(type)) if (isReelsAdSignalText(runCatching { m.invoke(value) as? String }.getOrNull())) return true
+        for (f in fieldsFor(type)) if (containsReelsAdSignal(runCatching { f.get(value) }.getOrNull(), depth+1, seen)) return true
         return false
     }
 
@@ -281,16 +318,15 @@ class AdStoryInspector(private val adKindEnumClass: Class<*>) {
 // ─── FeedItemInspector ────────────────────────────────────────────────────────
 
 class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
-    // Candidate names are tried in order, newest build first, so a single module
-    // build keeps working across several Facebook releases. On 571.0.0.44.73 the
-    // contract interface X.3Xk exposes exactly:
-    //   Aqi() -> boolean   B1h() -> X.3Yh   BE4() -> Object   BVx() -> double
     private val itemModelAccessor =
-        resolveItemContractAccessor(itemContractTypes, "B1h", "B2r") ?: resolveItemModelAccessor(itemContractTypes)
+        resolveItemContractAccessor(itemContractTypes, "B1P")
+            ?: resolveItemContractAccessor(itemContractTypes, "B2r") ?: resolveItemModelAccessor(itemContractTypes)
     private val itemEdgeAccessor =
-        resolveItemContractAccessor(itemContractTypes, "BE4", "BG7") ?: resolveItemEdgeAccessor(itemContractTypes)
+        resolveItemContractAccessor(itemContractTypes, "BDp")
+            ?: resolveItemContractAccessor(itemContractTypes, "BG7") ?: resolveItemEdgeAccessor(itemContractTypes)
     private val itemNetworkAccessor =
-        resolveItemContractAccessor(itemContractTypes, "Aqi", "ArH") ?: resolveItemNetworkAccessor(itemContractTypes)
+        resolveItemContractAccessor(itemContractTypes, "AqM")
+            ?: resolveItemContractAccessor(itemContractTypes, "ArH") ?: resolveItemNetworkAccessor(itemContractTypes)
     private val categoryMethodCache       = ConcurrentHashMap<Class<*>, Method>()
     private val edgeAccessorCache         = ConcurrentHashMap<Class<*>, Method>()
     private val edgeCategoryAccessorCache = ConcurrentHashMap<Class<*>, Method>()
@@ -357,6 +393,16 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
     fun storyPoolBlockReason(value: Any?): String? =
         if (isDefinitelySponsoredFeedItem(value)) "strict" else null
 
+    /** Resolves the edge for [value] and returns true only when its category is one of
+     *  the strict FEED_COLLECTION_AD_CATEGORY_VALUES — used by the cached-feed section
+     *  sanitizer and the addNewEdgeToCollection filter, where only an explicitly-tagged
+     *  sponsored edge should be dropped (pagination-preserving). */
+    fun isExplicitlySponsoredFeedEdge(value: Any?): Boolean {
+        val edge = edgeFrom(value) ?: return false
+        val edgeCategory = readEdgeCategory(edge) ?: readCategory(edge)
+        return edgeCategory != null && edgeCategory in FEED_COLLECTION_AD_CATEGORY_VALUES
+    }
+
     fun describe(item: Any?): String {
         if (item == null) return "null"
         val facts = factsFor(item)
@@ -404,7 +450,8 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
     private fun feedUnitFrom(edge: Any?): Any? {
         if (edge == null) return null
         val accessor = cachedMethod(feedUnitAccessorCache, edge.javaClass) {
-            resolveNamedNoArgAccessor(edge.javaClass, "A03", "BL9")
+            resolveNamedNoArgAccessor(edge.javaClass, "BL9")
+                ?: resolveNamedNoArgAccessor(edge.javaClass, "A03")
                 ?: resolveChildAccessor(edge) { v ->
                     val cn = v?.javaClass?.name
                     cn == GRAPHQL_MULTI_ADS_FEED_UNIT_CLASS || cn == GRAPHQL_QUICK_PROMO_FEED_UNIT_CLASS ||
@@ -420,7 +467,8 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
     private fun backendDataFrom(edge: Any?): Any? {
         if (edge == null) return null
         val accessor = cachedMethod(backendDataAccessorCache, edge.javaClass) {
-            resolveNamedNoArgAccessor(edge.javaClass, "A05", "BL0")
+            resolveNamedNoArgAccessor(edge.javaClass, "BL0")
+                ?: resolveNamedNoArgAccessor(edge.javaClass, "A05")
                 ?: resolveChildAccessor(edge) { v -> readTypeName(v) == "FeedBackendData" }
         }
         return invokeNoThrow(accessor, edge)
@@ -429,7 +477,7 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
     private fun readEdgeCategory(value: Any?): String? {
         if (value == null) return null
         val accessor = cachedMethod(edgeCategoryAccessorCache, value.javaClass) {
-            resolveNamedNoArgAccessor(value.javaClass, "B3W", "B4k")
+            resolveNamedNoArgAccessor(value.javaClass, "B4k")
                 ?: allInstanceMethods(value.javaClass).firstOrNull { m ->
                     m.parameterCount == 0 && m.returnType.isEnum &&
                     m.returnType.enumConstants?.any { val n = it.toString(); n == "SPONSORED" || n == "PROMOTION" } == true
@@ -441,24 +489,14 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
     /** Looks for an exact-named accessor on the item-contract interfaces first
      *  (the obfuscated name is stable across most Facebook builds for a given
      *  feed-item contract), before falling back to the generic shape-based search. */
-    private fun resolveItemContractAccessor(
-        itemContractTypes: Collection<Class<*>>, vararg methodNames: String
-    ): Method? =
-        methodNames.asSequence()
-            .mapNotNull { wanted ->
-                itemContractTypes.asSequence()
-                    .flatMap { allInstanceMethods(it).asSequence() }
-                    .firstOrNull { m -> m.parameterCount == 0 && m.name == wanted }
-            }
-            .firstOrNull()
+    private fun resolveItemContractAccessor(itemContractTypes: Collection<Class<*>>, methodName: String): Method? =
+        itemContractTypes.asSequence()
+            .flatMap { allInstanceMethods(it).asSequence() }
+            .firstOrNull { m -> m.parameterCount == 0 && m.name == methodName }
             ?.apply { isAccessible = true }
 
-    private fun resolveNamedNoArgAccessor(type: Class<*>, vararg methodNames: String): Method? =
-        methodNames.asSequence()
-            .mapNotNull { wanted ->
-                allInstanceMethods(type).firstOrNull { m -> m.parameterCount == 0 && m.name == wanted }
-            }
-            .firstOrNull()
+    private fun resolveNamedNoArgAccessor(type: Class<*>, methodName: String): Method? =
+        allInstanceMethods(type).firstOrNull { m -> m.parameterCount == 0 && m.name == methodName }
             ?.apply { isAccessible = true }
 
     fun describeAccessors(): String =
@@ -500,8 +538,7 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
     private fun resolveItemModelAccessor(types: Collection<Class<*>>) = types.asSequence()
         .flatMap { allInstanceMethods(it).asSequence() }
         .firstOrNull { m ->
-            m.parameterCount == 0 && m.name != "clone" && m.name != "A02" &&
-            m.name != "BG7" && m.name != "BE4" &&
+            m.parameterCount == 0 && m.name != "clone" && m.name != "A02" && m.name != "BG7" &&
             !m.returnType.isPrimitive && m.returnType != Any::class.java && m.returnType != String::class.java && !m.returnType.isEnum
         }
         ?.apply { isAccessible = true }
@@ -539,11 +576,11 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
         if (value is CharSequence) return isAdSignalText(value.toString())
         val type = value.javaClass
         if (isAdSignalText(type.name)) return true
-        if (type.isEnum) return isAdSignalText(safeToString(value))
+        if (type.isEnum) return isAdSignalText(value.toString())
         if (type.isPrimitive || value is Number || value is Boolean) return false
-        if (isAdSignalText(safeToString(value))) return true
+        if (isAdSignalText(runCatching { value.toString() }.getOrNull())) return true
         for (m in stringAccessorsFor(type)) if (isAdSignalText(invokeNoThrow(m, value) as? String)) return true
-        for (f in stringFieldsFor(type)) if (isAdSignalText(safeGet(f, value) as? String)) return true
+        for (f in stringFieldsFor(type)) if (isAdSignalText(runCatching { f.get(value) as? String }.getOrNull())) return true
         return false
     }
 
@@ -578,10 +615,8 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
         }; return map.values.toList()
     }
 
-    private fun invokeNoThrow(method: Method?, target: Any?): Any? {
-        if (method == null || target == null) return null
-        return safeInvoke(method, target)
-    }
+    private fun invokeNoThrow(method: Method?, target: Any?) =
+        if (method == null || target == null) null else runCatching { method.invoke(target) }.getOrNull()
 }
 
 // ─── Logging ──────────────────────────────────────────────────────────────────
@@ -589,6 +624,12 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
 fun logHookHitThrottled(hookName: String, method: Method, detail: String? = null) {
     val hits = hookHitCounters.computeIfAbsent(hookName) { AtomicInteger(0) }.incrementAndGet()
 }
+
+/** Stable per-method key used to dedup hook installation across the DexKit-resolved and
+ *  the FB571 hardcoded-name fast paths (both can resolve the same underlying method). */
+fun methodHookKey(method: Method): String =
+    "${method.declaringClass.name}#${method.name}(" +
+        method.parameterTypes.joinToString(",") { it.name } + "):${method.returnType.name}"
 
 // ─── Hook installers – Reels / list-builder ───────────────────────────────────
 
@@ -641,15 +682,18 @@ fun hookPluginPackFallback(method: Method, inspector: AdStoryInspector) {
 private fun isMarketplaceAdsPluginPack(instance: Any): Boolean {
     val className = instance.javaClass.name
     return marketplaceAdsPackCache.getOrPut(className) {
-        instance.javaClass.declaredMethods
+        runCatching {
+            instance.javaClass.declaredMethods
                 .filter { m -> m.parameterCount == 0 && m.returnType == String::class.java && !Modifier.isStatic(m.modifiers) }
                 .any { m -> m.isAccessible = true; (m.invoke(instance) as? String)?.contains("Ads", ignoreCase = true) == true }
+        }.getOrDefault(false)
     }
 }
 
 // ─── Hook installers – Feed CSR / late-list ───────────────────────────────────
 
-fun hookFeedCsrFilterInput(hook: FeedCsrFilterHook, inspector: FeedItemInspector) {
+fun hookFeedCsrFilterInput(hook: FeedCsrFilterHook, inspector: FeedItemInspector): Boolean {
+    if (!feedCsrMethodsHooked.add(methodHookKey(hook.method))) return false
     XposedBridge.hookMethod(hook.method, object : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) {
             val originalList = param.args.getOrNull(hook.listArgIndex) as? Iterable<*> ?: return
@@ -664,45 +708,42 @@ fun hookFeedCsrFilterInput(hook: FeedCsrFilterHook, inspector: FeedItemInspector
         override fun afterHookedMethod(param: MethodHookParam) {
             val resultItems = extractFeedItemsFromResult(param.result) ?: return
             val kept = ArrayList<Any?>(); var removed = 0
-            // Broader check on the way OUT: the pipeline has now resolved everything,
-            // so the wider heuristic is safe to apply here.
-            for (item in resultItems) { if (inspector.isSponsoredFeedItem(item)) removed++ else kept.add(item) }
+            // Upstream uses the STRICT check here too (isDefinitelySponsoredFeedItem),
+            // not the broader heuristic — kept 1:1 with FacebookAppAdsRemover.
+            for (item in resultItems) { if (inspector.isDefinitelySponsoredFeedItem(item)) removed++ else kept.add(item) }
             if (removed > 0) replaceFeedItemsInResult(param, kept)
         }
     })
+    return true
 }
 
-fun hookLateFeedListSanitizer(hook: FeedListSanitizerHook, inspector: FeedItemInspector) {
+fun hookLateFeedListSanitizer(hook: FeedListSanitizerHook, inspector: FeedItemInspector): Boolean {
+    if (!lateFeedMethodsHooked.add(methodHookKey(hook.method))) return false
     XposedBridge.hookMethod(hook.method, object : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) {
             val originalList = param.args.getOrNull(hook.listArgIndex) as? Iterable<*> ?: return
             val kept = ArrayList<Any?>(); var removed = 0
-            for (item in originalList) { if (inspector.isSponsoredFeedItem(item)) removed++ else kept.add(item) }
+            // Upstream uses the STRICT check (isDefinitelySponsoredFeedItem) — kept 1:1.
+            for (item in originalList) { if (inspector.isDefinitelySponsoredFeedItem(item)) removed++ else kept.add(item) }
             if (removed <= 0) return
             buildImmutableListLike(param.args.getOrNull(hook.listArgIndex), kept)?.let {
                 param.args[hook.listArgIndex] = it
             }
         }
     })
+    return true
 }
 
 fun hookStoryPoolAdd(method: Method, inspector: FeedItemInspector) {
     XposedBridge.hookMethod(method, object : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) {
             val item = param.args.getOrNull(0)
-            val blockReason = inspector.storyPoolBlockReason(item)
-            if (blockReason == null) {
-                // Broad check: log but allow (same as upstream)
-                if (inspector.isSponsoredFeedItem(item)) {
-                    logHookHitThrottled("storyPoolBroadAllowed", method, inspector.describe(item))
-                }
-                return
-            }
+            // Chỉ chặn khi CHẮC CHẮN là sponsored (strict). Upstream còn gọi
+            // isSponsoredFeedItem(broad) + describe() ở đây nhưng CHỈ để đưa vào logger;
+            // logHookHitThrottled trong NexAlloy là no-op nên hai lệnh reflection nặng
+            // đó chạy mỗi story khi cuộn feed mà không làm gì — đã lược để tiết kiệm pin.
+            if (inspector.storyPoolBlockReason(item) == null) return
             param.result = false
-            logHookHitThrottled(
-                if (blockReason == "strict") "storyPoolStrictBlock" else "storyPoolBroadNetworkBlock",
-                method, inspector.describe(item)
-            )
         }
     })
 }
@@ -727,10 +768,12 @@ fun hookReelsBannerRender(method: Method) {
 
 // ─── Hook installers – Sponsored pool ────────────────────────────────────────
 
-fun hookSponsoredPoolAdd(method: Method) {
+fun hookSponsoredPoolAdd(method: Method): Boolean {
+    if (!sponsoredPoolMethodsHooked.add(methodHookKey(method))) return false
     XposedBridge.hookMethod(method, object : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) { param.result = false }
     })
+    return true
 }
 
 fun hookSponsoredStoryNext(method: Method) {
@@ -790,9 +833,11 @@ private fun isSponsoredStoryListMethod(method: Method): Boolean {
 
 private fun buildEmptyListReturn(returnType: Class<*>): Any? {
     if (returnType.name == "com.google.common.collect.ImmutableList") {
-        val of = returnType.getDeclaredMethod("of")
-        of.isAccessible = true
-        return of.invoke(null)
+        return runCatching {
+            val of = returnType.getDeclaredMethod("of")
+            of.isAccessible = true
+            of.invoke(null)
+        }.getOrNull()
     }
     return when {
         returnType.isAssignableFrom(ArrayList::class.java) -> arrayListOf<Any?>()
@@ -894,6 +939,7 @@ fun hookStoryAdsMerge(method: Method, source: String = method.declaringClass.nam
 }
 
 fun hookStoryAdProvider(provider: StoryAdProviderHooks) {
+    if (!storyAdProviderClassesHooked.add(provider.providerClass.name)) return
     val hooked = ArrayList<String>()
     provider.mergeMethod?.let { method ->
         hookStoryAdsMerge(method, provider.providerClass.name); hooked.add("merge")
@@ -933,7 +979,7 @@ fun hookGameAdBridge(method: Method) {
     XposedBridge.hookMethod(method, object : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) {
             val raw = param.args.getOrNull(0) as? String ?: return
-            val payload = (JSONObject(raw)) ?: return
+            val payload = runCatching { JSONObject(raw) }.getOrNull() ?: return
             val type = payload.optString("type"); if (type !in GAME_AD_MESSAGE_TYPES) return
             rememberGameAdPayload(param.thisObject, payload, type)
             if (rejectUnavailableGameAdPayloadIfNeeded(param.thisObject, payload, type, "bridge ${method.declaringClass.name}.${method.name}")) { param.result = null; return }
@@ -977,7 +1023,7 @@ fun hookGameAdResultMethods(bridgeClass: Class<*>) {
                 if (!shouldConvertGameAdRejectToSuccess(promiseId, reason)) return
                 val snapshot = gameAdPromiseSnapshots[promiseId]
                 val success = forceGameAdSuccessResult(promiseId, null, snapshot?.payload, snapshot?.messageType ?: gameAdPromiseTypeFromReason(reason))
-                XposedBridge.invokeOriginalMethod(resolveMethod, param.thisObject, arrayOf(promiseId, success)); param.result = null
+                runCatching { XposedBridge.invokeOriginalMethod(resolveMethod, param.thisObject, arrayOf(promiseId, success)); param.result = null }
             }
         }); hooked++
     }
@@ -991,7 +1037,7 @@ fun hookGameAdResultMethods(bridgeClass: Class<*>) {
                 if (!shouldConvertGameAdRejectToSuccess(promiseId, reason)) return
                 val snapshot = gameAdPromiseSnapshots[promiseId]
                 val success = forceGameAdSuccessResult(promiseId, null, snapshot?.payload ?: payload, snapshot?.messageType ?: gameAdPromiseTypeFromReason(reason))
-                XposedBridge.invokeOriginalMethod(resolveMethod, param.thisObject, arrayOf(promiseId, success)); param.result = null
+                runCatching { XposedBridge.invokeOriginalMethod(resolveMethod, param.thisObject, arrayOf(promiseId, success)); param.result = null }
             }
         }); hooked++
     }
@@ -1012,7 +1058,7 @@ fun hookGameAdServiceDispatchMethods(bridgeClass: Class<*>) {
                 val messageType = param.args.getOrNull(1)?.toString()?.lowercase()?.takeIf { it in GAME_AD_MESSAGE_TYPES } ?: return
                 val payload = buildGameAdPayloadFromServiceBundle(bundle, messageType)
                 rememberGameAdPayload(param.thisObject, payload, messageType)
-                if (rejectUnavailableGameAdPayloadIfNeeded(param.thisObject, payload, messageType, "service dispatch ${m.name}")) { param.result = null; return }
+                if (rejectUnavailableGameAdPayloadIfNeeded(param.thisObject, payload, messageType, "service dispatch ${m.declaringClass.name}.${m.name}")) { param.result = null; return }
                 if (!shouldAutofixGameAdMessage(messageType)) return
                 if (resolveGameAdPayload(param.thisObject, payload, messageType)) {
                     dispatchPostResolveGameAdSignals(param.thisObject, payload, messageType); param.result = null
@@ -1056,7 +1102,8 @@ fun hookGameAdActivityLaunchFallbacks() {
     }
     var hooked = 0
     methods.values.forEach { m ->
-        XposedBridge.hookMethod(m, object : XC_MethodHook() {
+        runCatching {
+            XposedBridge.hookMethod(m, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val intent = param.args.firstOrNull { it is Intent } as? Intent ?: return
                     val target = intent.component?.className ?: return
@@ -1066,6 +1113,7 @@ fun hookGameAdActivityLaunchFallbacks() {
                     param.result = if (m.returnType == Boolean::class.javaPrimitiveType) false else null
                 }
             }); hooked++
+        }
     }
 }
 
@@ -1170,16 +1218,30 @@ fun hookGlobalGameAdSurfaceFallbacks() {
 
 }
 
-/** Hook Audience Network reward classes to fire completion callbacks. */
+/**
+ * Hook Audience Network reward classes to fire completion callbacks.
+ *
+ * KHÁC upstream (tối ưu pin): upstream hook ClassLoader.loadClass VĨNH VIỄN, nên
+ * afterHookedMethod chạy trên MỌI lần load class suốt vòng đời app. Reward class chỉ
+ * load một lần (khi có reward ad) rồi được cache, nên việc theo dõi loadClass mãi là
+ * lãng phí. Ở đây:
+ *   1. Thử load + hook trực tiếp 6 reward class trước (thường đã nằm sẵn trong dex
+ *      com.facebook.ads). Nếu cả 2 CORE class (RewardedVideoAd / RewardedInterstitialAd
+ *      — nơi chứa show()) đã hook được thì KHÔNG cài loadClass hook chút nào.
+ *   2. Nếu còn thiếu (reward class ở split-APK chưa load), mới cài loadClass hook —
+ *      nhưng nó TỰ GỠ chính mình ngay khi cả 2 core class đã bị hook (tức khi người
+ *      dùng thật sự vào reward ad lần đầu). Sau đó loadClass trở lại 0 overhead.
+ * Kết quả chức năng giống hệt upstream, chỉ khác là loadClass hook sống ngắn thay vì
+ * mãi mãi.
+ */
+private val AUDIENCE_NETWORK_CORE_REWARD_CLASSES = setOf(
+    "com.facebook.ads.RewardedVideoAd",
+    "com.facebook.ads.RewardedInterstitialAd"
+)
+
 fun hookAudienceNetworkRewardFallbacks(classLoader: ClassLoader) {
     if (!audienceNetworkRewardHooksInstalled.compareAndSet(0, 1)) return
 
-    // These are best-effort. On Facebook 571.0.0.44.73 none of them exist in the
-    // base APK any more — the Audience Network SDK is fully obfuscated into X.*
-    // and/or ships in a dynamically loaded module (modules/longtail_0). A bare
-    // loadClass() therefore threw ClassNotFoundException on the very first name
-    // and aborted the entire HideFacebookAds patch, so steps 12-14 below never
-    // installed. Anything that shows up later is caught by the ClassLoader hook.
     listOf(
         "com.facebook.ads.RewardedVideoAd",
         "com.facebook.ads.RewardedInterstitialAd",
@@ -1187,22 +1249,32 @@ fun hookAudienceNetworkRewardFallbacks(classLoader: ClassLoader) {
         "com.facebook.ads.RewardedInterstitialAdListener",
         "com.facebook.ads.RewardedVideoAd\$RewardedVideoAdLoadConfigBuilder",
         "com.facebook.ads.RewardedInterstitialAd\$RewardedInterstitialAdLoadConfigBuilder"
-    ).forEach { cn ->
-        runCatching { classLoader.loadClass(cn) }
-            .onSuccess { tryHookAudienceNetworkRewardClass(it) }
-    }
+    ).forEach { cn -> runCatching { tryHookAudienceNetworkRewardClass(classLoader.loadClass(cn)) } }
 
+    // Cả 2 core class đã hook trực tiếp → không cần theo dõi loadClass nữa.
+    if (audienceNetworkRewardClassesHooked.containsAll(AUDIENCE_NETWORK_CORE_REWARD_CLASSES)) return
+
+    // Còn thiếu core class → cài loadClass hook TẠM THỜI, tự gỡ khi đủ.
+    val loadClassUnhooks = Collections.synchronizedList(ArrayList<XC_MethodHook.Unhook>())
     (ClassLoader::class.java.declaredMethods + ClassLoader::class.java.methods)
         .filter { m -> m.name == "loadClass" && m.parameterTypes.isNotEmpty() && m.parameterTypes[0] == String::class.java }
         .distinctBy { m -> m.name + m.parameterTypes.joinToString { it.name } }
         .forEach { m ->
             m.isAccessible = true
-            XposedBridge.hookMethod(m, object : XC_MethodHook() {
+            val unhook = XposedBridge.hookMethod(m, object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val clazz = param.result as? Class<*> ?: return
                     if (isAudienceNetworkRewardRelevantClass(clazz.name)) tryHookAudienceNetworkRewardClass(clazz)
+                    // Đã hook đủ 2 core class → gỡ toàn bộ loadClass hook, trả pin lại.
+                    if (audienceNetworkRewardClassesHooked.containsAll(AUDIENCE_NETWORK_CORE_REWARD_CLASSES)) {
+                        synchronized(loadClassUnhooks) {
+                            loadClassUnhooks.forEach { u -> runCatching { u.unhook() } }
+                            loadClassUnhooks.clear()
+                        }
+                    }
                 }
             })
+            loadClassUnhooks.add(unhook)
         }
 }
 
@@ -1210,10 +1282,11 @@ private fun tryHookAudienceNetworkRewardClass(clazz: Class<*>) {
     val className = clazz.name
     if (!isAudienceNetworkRewardRelevantClass(className) || !audienceNetworkRewardClassesHooked.add(className)) return
     var hooked = 0
-    val methods = (clazz.declaredMethods + clazz.methods)
+    val methods = runCatching { clazz.declaredMethods + clazz.methods }.getOrDefault(emptyArray())
     methods.distinctBy { m -> m.name + m.parameterTypes.joinToString(prefix = "(", postfix = ")") { it.name } }
         .forEach { m ->
-            m.isAccessible = true
+            runCatching {
+                m.isAccessible = true
                 if (isAudienceNetworkRewardShowMethod(clazz, m)) {
                     XposedBridge.hookMethod(m, object : XC_MethodHook() {
                         override fun beforeHookedMethod(param: MethodHookParam) {
@@ -1238,6 +1311,7 @@ private fun tryHookAudienceNetworkRewardClass(clazz: Class<*>) {
                         override fun beforeHookedMethod(param: MethodHookParam) { rememberAudienceNetworkRewardListeners(param.thisObject, param.args, m) }
                     }); hooked++
                 }
+            }.onFailure {  }
         }
 }
 
@@ -1254,8 +1328,7 @@ fun resolveGameAdPayload(target: Any?, payload: Any?, messageType: String? = nul
     val promiseId = extractPromiseId(payload) ?: return false
     val resolveMethod = resolveGameAdResolveMethod(target.javaClass) ?: return false
     val successPayload = buildGameAdSuccessPayload(payload, messageType)
-    resolveMethod.invoke(target, promiseId, successPayload)
-    return true
+    return runCatching { resolveMethod.invoke(target, promiseId, successPayload); true }.getOrElse { false }
 }
 
 fun rejectGameAdPayload(
@@ -1265,13 +1338,11 @@ fun rejectGameAdPayload(
 ): Boolean {
     if (target == null || payload == null) return false
     resolveGameAdBridgeRejectMethod(target.javaClass)?.let { m ->
-        m.invoke(target, message, code, payload)
-        return true
+        if (runCatching { m.invoke(target, message, code, payload); true }.getOrElse { false }) return true
     }
     val promiseId = extractPromiseId(payload) ?: return false
     val rejectMethod = resolveGameAdRejectMethod(target.javaClass) ?: return false
-    rejectMethod.invoke(target, promiseId, message, code)
-    return true
+    return runCatching { rejectMethod.invoke(target, promiseId, message, code); true }.getOrElse { false }
 }
 
 private fun rejectUnavailableGameAdPayloadIfNeeded(target: Any?, payload: Any?, messageType: String?, source: String = "unknown"): Boolean {
@@ -1304,7 +1375,7 @@ fun shouldAutofixGameAdMessage(messageType: String?) = messageType in GAME_AD_AU
 
 private fun shouldBlockGameAdActivityLaunch(className: String): Boolean {
     return className in HARD_BLOCKED_GAME_AD_ACTIVITY_CLASS_NAMES ||
-        (className in AUDIENCE_NETWORK_ACTIVITY_CLASS_NAMES &&
+        (className in setOf(AUDIENCE_NETWORK_ACTIVITY_CLASS, AUDIENCE_NETWORK_REMOTE_ACTIVITY_CLASS) &&
          isRecentUnavailableGameAd())
 }
 
@@ -1330,7 +1401,7 @@ fun rememberGameAdPayload(target: Any?, payload: Any?, messageType: String?) {
     if (target == null || payload !is JSONObject || messageType !in GAME_AD_MESSAGE_TYPES) return
     val now = System.currentTimeMillis()
     recentGameAdTargets[target] = now
-    val snapshotPayload = (JSONObject(payload.toString())) ?: payload
+    val snapshotPayload = runCatching { JSONObject(payload.toString()) }.getOrNull() ?: payload
     extractGameAdContent(snapshotPayload)?.optString("adInstanceID")?.takeIf { it.isNotBlank() }?.let { id ->
         messageType?.let { gameAdInstanceTypes[id] = it }
     }
@@ -1437,7 +1508,7 @@ private fun gameAdPromiseTypeFromReason(reason: String): String? {
 
 private fun handleGameAdActivity(activity: Activity, source: String) {
     when (activity.javaClass.name) {
-        in AUDIENCE_NETWORK_ACTIVITY_CLASS_NAMES -> {
+        AUDIENCE_NETWORK_ACTIVITY_CLASS, AUDIENCE_NETWORK_REMOTE_ACTIVITY_CLASS -> {
             forceAudienceNetworkRewardCompletion(activity, source)
             finishGameAdActivity(activity, source)
         }
@@ -1472,7 +1543,7 @@ private fun forceAudienceNetworkRewardCompletion(activity: Activity, source: Str
         invoked += invokeAudienceNetworkRewardCompletionMethods(value)
         if (depth >= 5 || !shouldTraverseAudienceNetworkObject(value, value === activity)) continue
         audienceNetworkFieldsFor(value.javaClass).forEach { field ->
-            val fieldValue = (field.get(value)) ?: return@forEach
+            val fieldValue = runCatching { field.get(value) }.getOrNull() ?: return@forEach
             when (fieldValue) {
                 is Iterable<*> -> fieldValue.take(12).forEach { item ->
                     if (item != null && shouldQueueAudienceNetworkObject(item)) queue.add(item to depth + 1)
@@ -1493,7 +1564,7 @@ private fun invokeAudienceNetworkRewardCompletionMethods(target: Any): Int {
     audienceNetworkMethodsFor(target.javaClass).filter { m ->
         !Modifier.isStatic(m.modifiers) && m.parameterCount == 0 &&
         (m.name in AUDIENCE_NETWORK_REWARD_COMPLETION_METHOD_NAMES || (m.name.contains("Reward", ignoreCase = true) && m.name.contains("Complete", ignoreCase = true)))
-    }.forEach { m -> m.invoke(target); invoked++ }
+    }.forEach { m -> runCatching { m.invoke(target); invoked++ } }
     return invoked
 }
 
@@ -1519,7 +1590,8 @@ private fun invokeAudienceNetworkRewardListenerCallbacks(listener: Any, adObject
             .filter { m -> m.name in group }
             .forEach { m ->
                 val args = audienceNetworkCallbackArgs(m, adObject) ?: return@forEach
-                m.invoke(listener, *args); invoked++
+                runCatching { m.invoke(listener, *args); invoked++ }
+                    .onFailure {  }
             }
     }
     return invoked
@@ -1559,7 +1631,7 @@ private fun findAudienceNetworkRewardListeners(root: Any?): List<Any> {
         if (value !== root && isAudienceNetworkRewardListenerObject(value)) { listeners.add(value); continue }
         if (depth >= 5 || !shouldQueueAudienceNetworkObject(value)) continue
         audienceNetworkFieldsFor(value.javaClass).forEach { f ->
-            val fv = safeGet(f, value) ?: return@forEach
+            val fv = runCatching { f.get(value) }.getOrNull() ?: return@forEach
             when (fv) {
                 is Iterable<*> -> fv.take(12).forEach { item -> if (item != null && (isAudienceNetworkRewardListenerObject(item) || shouldQueueAudienceNetworkObject(item))) queue.add(item to depth + 1) }
                 is Array<*>    -> fv.take(12).forEach { item -> if (item != null && (isAudienceNetworkRewardListenerObject(item) || shouldQueueAudienceNetworkObject(item))) queue.add(item to depth + 1) }
@@ -1751,7 +1823,7 @@ private fun sweepGameAdSurface(view: View?, reason: String): Boolean {
 }
 
 private fun injectGameAdHidingScript(webView: WebView) {
-    webView.post { webView.evaluateJavascript(GAME_AD_WEBVIEW_HIDE_SCRIPT, null) }
+    webView.post { runCatching { webView.evaluateJavascript(GAME_AD_WEBVIEW_HIDE_SCRIPT, null) } }
 
 }
 
@@ -1884,8 +1956,7 @@ private fun isSafeFeedMarkerCardCandidate(view: View, rootWidth: Int, rootHeight
     if (height < maxOf(360, (rootHeight * 0.18f).toInt())) return false
     if (height > (rootHeight * 0.82f).toInt()) return false
     val location = IntArray(2)
-    view.getLocationOnScreen(location)
-    val topOnScreen = location[1]
+    val topOnScreen = runCatching { view.getLocationOnScreen(location); location[1] }.getOrDefault(view.top)
     val bottomOnScreen = topOnScreen + height
     if (topOnScreen < (rootHeight * 0.04f).toInt()) return false
     if (bottomOnScreen > (rootHeight * 0.96f).toInt()) return false
@@ -1906,8 +1977,7 @@ private fun isLikelyExplicitFeedAdCardContainer(view: View, rootWidth: Int, root
     if (height < maxOf(420, (rootHeight * 0.18f).toInt())) return false
     if (height > (rootHeight * 0.96f).toInt()) return false
     val location = IntArray(2)
-    view.getLocationOnScreen(location)
-    val topOnScreen = location[1]
+    val topOnScreen = runCatching { view.getLocationOnScreen(location); location[1] }.getOrDefault(view.top)
     val bottomOnScreen = topOnScreen + height
     if (topOnScreen < (rootHeight * 0.04f).toInt()) return false
     if (bottomOnScreen > (rootHeight * 0.98f).toInt()) return false
@@ -1959,8 +2029,7 @@ private fun isLikelyFeedReelCtaAdContainer(view: View, rootWidth: Int, rootHeigh
     if (width < (rootWidth * 0.82f).toInt()) return false
     if (height < (rootHeight * 0.45f).toInt() || height > (rootHeight * 0.92f).toInt()) return false
     val location = IntArray(2)
-    view.getLocationOnScreen(location)
-    val topOnScreen = location[1]
+    val topOnScreen = runCatching { view.getLocationOnScreen(location); location[1] }.getOrDefault(view.top)
     if (topOnScreen < (rootHeight * 0.08f).toInt()) return false
     val signals = collectFeedReelCtaAdSignals(view)
     return signals.hasSharedLink && signals.hasSendMessageCta && (signals.hasReelSurface || signals.hasLeadGenPrompt)
@@ -1996,8 +2065,8 @@ private fun collectViewMarkerTexts(view: View?): List<String> {
     val values = LinkedHashSet<String>()
     view.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let(values::add)
     (view as? TextView)?.text?.toString()?.takeIf { it.isNotBlank() }?.let(values::add)
-    val info = view.createAccessibilityNodeInfo()
-    if (info != null) {
+    runCatching {
+        val info = view.createAccessibilityNodeInfo() ?: return@runCatching
         try {
             info.text?.toString()?.takeIf { it.isNotBlank() }?.let(values::add)
             info.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let(values::add)
@@ -2053,8 +2122,10 @@ private fun isLikelyBannerSized(view: View, root: View?): Boolean {
     val height = view.height
     if (height <= 0 || height > maxOf(360, rootHeight / 3)) return false
     val location = IntArray(2)
-    view.getLocationOnScreen(location)
-    return location[1] + height > rootHeight / 2
+    return runCatching {
+        view.getLocationOnScreen(location)
+        location[1] + height > rootHeight / 2
+    }.getOrDefault(true)
 }
 
 private fun isPotentialNativeGameAdView(view: View?): Boolean {
@@ -2100,8 +2171,7 @@ private fun dispatchGameEvent(target: Any?, eventType: String, content: Any?): B
     if (target == null) return false
     val method = resolveGameEventDispatchMethod(target.javaClass) ?: return false
     val eventValue = resolveGameEventValue(method.parameterTypes[0], eventType) ?: return false
-    method.invoke(target, eventValue, content ?: JSONObject.NULL)
-    return true
+    return runCatching { method.invoke(target, eventValue, content ?: JSONObject.NULL); true }.getOrElse { false }
 }
 
 private fun resolveGameEventDispatchMethod(type: Class<*>?): Method? {
@@ -2116,12 +2186,12 @@ private fun resolveGameEventValue(eventType: Class<*>, eventName: String): Any? 
     val valuesMethod = (eventType.declaredMethods + eventType.methods).firstOrNull { m ->
         Modifier.isStatic(m.modifiers) && m.parameterCount == 0 && m.returnType.isArray && m.returnType.componentType == eventType
     }?.apply { isAccessible = true }
-    val values = (valuesMethod?.invoke(null) as? Array<*>).orEmpty()
+    val values = runCatching { valuesMethod?.invoke(null) as? Array<*> }.getOrNull().orEmpty()
     values.firstOrNull { it?.toString() == eventName }?.let { return it }
     return eventType.declaredFields.firstOrNull { f ->
         Modifier.isStatic(f.modifiers) && f.type == eventType &&
-        run { f.isAccessible = true; f.get(null)?.toString() == eventName }
-    }?.let { f -> f.get(null) }
+        runCatching { f.isAccessible = true; f.get(null)?.toString() == eventName }.getOrDefault(false)
+    }?.let { f -> runCatching { f.get(null) }.getOrNull() }
 }
 
 fun extractPromiseId(payload: Any?): String? {
@@ -2129,8 +2199,8 @@ fun extractPromiseId(payload: Any?): String? {
     if (jClass.name != "org.json.JSONObject") return null
     val getJSONObject = (jClass.declaredMethods + jClass.methods).firstOrNull { m -> m.name == "getJSONObject" && m.parameterCount == 1 && m.parameterTypes[0] == String::class.java }?.apply { isAccessible = true } ?: return null
     val getString = (jClass.declaredMethods + jClass.methods).firstOrNull { m -> m.name == "getString" && m.parameterCount == 1 && m.parameterTypes[0] == String::class.java }?.apply { isAccessible = true } ?: return null
-    val content = getJSONObject.invoke(payload, "content") ?: return null
-    return getString.invoke(content, "promiseID") as? String
+    val content = runCatching { getJSONObject.invoke(payload, "content") }.getOrNull() ?: return null
+    return runCatching { getString.invoke(content, "promiseID") as? String }.getOrNull()
 }
 
 private fun extractGameAdContent(payload: Any?): JSONObject? = (payload as? JSONObject)?.optJSONObject("content")
@@ -2140,8 +2210,8 @@ private fun buildGameAdPayloadFromServiceBundle(bundle: Bundle, messageType: Str
 
 private fun bundleToJsonObject(bundle: Bundle): JSONObject {
     val json = JSONObject()
-    (bundle.keySet().toList()).forEach { key ->
-        val value = (bundle.get(key))
+    runCatching { bundle.keySet().toList() }.getOrDefault(emptyList()).forEach { key ->
+        val value = runCatching { bundle.get(key) }.getOrNull()
         when (value) {
             null            -> json.put(key, JSONObject.NULL)
             is String       -> json.put(key, value)
@@ -2175,8 +2245,10 @@ fun filterAdItems(list: MutableList<Any?>, inspector: AdStoryInspector): Int {
 
 fun buildImmutableListLike(sample: Any?, items: List<Any?>): Any? {
     if (sample == null) return null
-    val cl = Class.forName("com.google.common.collect.ImmutableList", false, sample.javaClass.classLoader)
-    return cl.getDeclaredMethod("copyOf", Iterable::class.java).invoke(null, items)
+    return runCatching {
+        val cl = Class.forName("com.google.common.collect.ImmutableList", false, sample.javaClass.classLoader)
+        cl.getDeclaredMethod("copyOf", Iterable::class.java).invoke(null, items)
+    }.getOrNull()
 }
 
 fun replaceFeedItemsInResult(param: XC_MethodHook.MethodHookParam, items: List<Any?>): Boolean {
@@ -2186,29 +2258,30 @@ fun replaceFeedItemsInResult(param: XC_MethodHook.MethodHookParam, items: List<A
 
 private fun rebuildFeedResult(result: Any, items: List<Any?>): Any? {
     val type = result.javaClass
-    val fields = type.declaredFields.onEach { it.isAccessible = true } ?: return null
+    val fields = runCatching { type.declaredFields.onEach { it.isAccessible = true } }.getOrNull() ?: return null
     val listField    = fields.firstOrNull { !Modifier.isStatic(it.modifiers) && Iterable::class.java.isAssignableFrom(it.type) } ?: return null
     val intArrayField = fields.firstOrNull { !Modifier.isStatic(it.modifiers) && it.type == IntArray::class.java } ?: return null
     val intFields    = fields.filter { !Modifier.isStatic(it.modifiers) && it.type == Int::class.javaPrimitiveType }
     if (intFields.size < 3) return null
-    val originalList = listField.get(result)
+    val originalList = runCatching { listField.get(result) }.getOrNull()
     val rebuiltList  = buildImmutableListLike(originalList, items) ?: return null
-    val stats        = (intArrayField.get(result) as? IntArray)?.clone() ?: return null
-    val ints         = intFields.map { f -> f.getInt(result) ?: return null }
+    val stats        = runCatching { intArrayField.get(result) as? IntArray }.getOrNull()?.clone() ?: return null
+    val ints         = intFields.map { f -> runCatching { f.getInt(result) }.getOrNull() ?: return null }
     val ctor = type.declaredConstructors.firstOrNull { c ->
         c.parameterCount == 5 && c.parameterTypes.getOrNull(0)?.name == "com.google.common.collect.ImmutableList" &&
         c.parameterTypes.getOrNull(1) == IntArray::class.java && c.parameterTypes.drop(2).all { it == Int::class.javaPrimitiveType }
     } ?: return null
     ctor.isAccessible = true
-    return ctor.newInstance(rebuiltList, stats, ints[0], ints[1], ints[2])
+    return runCatching { ctor.newInstance(rebuiltList, stats, ints[0], ints[1], ints[2]) }.getOrNull()
 }
 
 fun extractFeedItemsFromResult(result: Any?): Iterable<*>? {
     if (result == null) return null
     if (result is Iterable<*>) return result
-    val f = result.javaClass.declaredFields.firstOrNull { Iterable::class.java.isAssignableFrom(it.type) } ?: return null
-    f.isAccessible = true
-    return f.get(result) as? Iterable<*>
+    return runCatching {
+        val f = result.javaClass.declaredFields.firstOrNull { Iterable::class.java.isAssignableFrom(it.type) } ?: return null
+        f.isAccessible = true; f.get(result) as? Iterable<*>
+    }.getOrNull()
 }
 
 // ─── Sponsored pool result type helpers ──────────────────────────────────────
@@ -2224,8 +2297,7 @@ fun buildSponsoredEmptyResult(type: Class<*>): Any? {
     val reasonType = ctor.parameterTypes.getOrNull(1) ?: return null
     val emptyReason = reasonType.enumConstants?.firstOrNull { it.toString() == "SPONSORED_GET_NEXT_RETURN_NULL" }
         ?: reasonType.enumConstants?.firstOrNull { it.toString() == "FAIL" } ?: return null
-    ctor.isAccessible = true
-    return ctor.newInstance(null, emptyReason)
+    ctor.isAccessible = true; return runCatching { ctor.newInstance(null, emptyReason) }.getOrNull()
 }
 
 // ─── Litho render method detection ───────────────────────────────────────────
@@ -2296,4 +2368,231 @@ fun resolveStoryAdProviderHooks(
     // and passed in directly — avoids picking wrong 0-param void method via broad reflection
     val resolvedInsertionTrigger = if (includeInsertionTrigger) insertionTriggerMethod else null
     return StoryAdProviderHooks(providerClass, mergeMethod, fetchMoreAdsMethod, deferredUpdateMethod, resolvedInsertionTrigger)
+}
+
+// ─── FB 571 hardcoded-class fast-path feed hooks ─────────────────────────────
+//
+// Ported 1:1 from upstream FacebookAppAdsRemover's installFacebook571FeedSourceFastPath /
+// installFacebook571FeedComponentGuard chain (BUILD_MARKER fb571_feed_edge_collection_v5).
+// These resolve obfuscated feed classes by NAME via Class.forName rather than DexKit,
+// so they catch sponsored edges at the decoded-response, cached-section, collection,
+// and Litho-component-render stages — complementing the DexKit-resolved hooks in
+// HideFacebookAdsPatch. All logging/tracing/diagnostic code from upstream is omitted.
+//
+// Upstream's Module.java scheduled these across several dex-ready callbacks and retry
+// delays; NexAlloy applies each patch exactly once from PatchExecutor at Application
+// onCreate, so the installers simply run inline from the patch body (see
+// HideFacebookAdsPatch). The per-method dedup sets above still guard against a class
+// being resolved by both this fast path and the DexKit path within the same run.
+
+private fun isFeedListType(type: Class<*>): Boolean =
+    Iterable::class.java.isAssignableFrom(type) ||
+        type.name == "com.google.common.collect.ImmutableList"
+
+/** Loads the FB571 item-contract interfaces by name; the returned inspector uses them
+ *  to read edge/category off decoded feed items. */
+private fun fb571FeedItemInspector(classLoader: ClassLoader): FeedItemInspector {
+    val contractTypes = FB571_FEED_ITEM_CONTRACT_CLASSES.mapNotNull { className ->
+        runCatching { Class.forName(className, false, classLoader) }.getOrNull()
+    }
+    return FeedItemInspector(contractTypes)
+}
+
+/** Master entry: installs the decoded-response fast path + collection filter + section
+ *  sanitizer + hardcoded story-ad source providers. Returns true when every component
+ *  reported at least one resolvable target (mirrors upstream's &&-combined return). */
+fun installFacebook571FeedSourceFastPath(classLoader: ClassLoader): Boolean {
+    val responseHooksInstalled   = installFacebook571FeedResponseFastPath(classLoader)
+    val collectionFilterInstalled = installFacebook571FeedCollectionFilter(classLoader)
+    val sectionSanitizerInstalled = installFacebook571FeedSectionSanitizer(classLoader)
+
+    val providers = FB571_STORY_AD_SOURCE_CLASSES.mapNotNull { className ->
+        val providerClass = runCatching { Class.forName(className, false, classLoader) }.getOrNull()
+            ?: return@mapNotNull null
+        resolveStoryAdProviderHooks(providerClass, includeInsertionTrigger = false).takeIf { p ->
+            p.mergeMethod != null || p.fetchMoreAdsMethod != null || p.deferredUpdateMethod != null
+        }
+    }
+    providers.forEach { hookStoryAdProvider(it) }
+
+    return responseHooksInstalled && collectionFilterInstalled && sectionSanitizerInstalled
+}
+
+/** Decoded feed-response CSR + network sanitiser + sponsored-pool add fast path. */
+private fun installFacebook571FeedResponseFastPath(classLoader: ClassLoader): Boolean {
+    val inspector = fb571FeedItemInspector(classLoader)
+
+    val csrHooks = FB571_FEED_CSR_TARGETS.flatMap { target ->
+        val targetClass = runCatching { Class.forName(target.className, false, classLoader) }.getOrNull()
+            ?: return@flatMap emptyList()
+        (targetClass.declaredMethods + targetClass.methods).asSequence()
+            .filter { m ->
+                m.name == target.methodName &&
+                !Modifier.isAbstract(m.modifiers) &&
+                m.parameterTypes.any(::isFeedListType)
+            }
+            .mapNotNull { m ->
+                val preferredIndex = m.parameterTypes.getOrNull(2)?.takeIf(::isFeedListType)?.let { 2 }
+                val listArgIndex = preferredIndex
+                    ?: m.parameterTypes.indexOfFirst(::isFeedListType).takeIf { it >= 0 }
+                    ?: return@mapNotNull null
+                FeedCsrFilterHook(m.apply { isAccessible = true }, listArgIndex)
+            }
+            .toList()
+    }.distinctBy { methodHookKey(it.method) }
+
+    csrHooks.forEach { hookFeedCsrFilterInput(it, inspector) }
+
+    val networkHooks = resolveFacebook571NetworkFeedHooks(classLoader)
+    networkHooks.forEach { hookLateFeedListSanitizer(it, inspector) }
+
+    val sponsoredPoolMethods = resolveFacebook571SponsoredPoolAdds(classLoader)
+    sponsoredPoolMethods.forEach { hookSponsoredPoolAdd(it) }
+
+    return csrHooks.isNotEmpty() && networkHooks.isNotEmpty() && sponsoredPoolMethods.isNotEmpty()
+}
+
+private fun resolveFacebook571NetworkFeedHooks(classLoader: ClassLoader): List<FeedListSanitizerHook> =
+    FB571_NETWORK_FEED_TARGETS.flatMap { target ->
+        val targetClass = runCatching { Class.forName(target.className, false, classLoader) }.getOrNull()
+            ?: return@flatMap emptyList()
+        (targetClass.declaredMethods + targetClass.methods).asSequence()
+            .filter { m ->
+                m.name == target.methodName &&
+                !Modifier.isAbstract(m.modifiers) &&
+                m.parameterTypes.firstOrNull()?.let(::isFeedListType) == true
+            }
+            .map { m -> FeedListSanitizerHook(m.apply { isAccessible = true }, 0) }
+            .toList()
+    }.distinctBy { methodHookKey(it.method) }
+
+private fun resolveFacebook571SponsoredPoolAdds(classLoader: ClassLoader): List<Method> =
+    FB571_SPONSORED_POOL_TARGETS.mapNotNull { target ->
+        val targetClass = runCatching { Class.forName(target.className, false, classLoader) }.getOrNull()
+            ?: return@mapNotNull null
+        (targetClass.declaredMethods + targetClass.methods).firstOrNull { m ->
+            m.name == target.methodName &&
+            !Modifier.isAbstract(m.modifiers) &&
+            m.parameterCount == 1 &&
+            m.returnType == Boolean::class.javaPrimitiveType
+        }?.apply { isAccessible = true }
+    }.distinctBy(::methodHookKey)
+
+/** addNewEdgeToCollection filter: forces false (skip this edge) for explicitly-sponsored
+ *  edges. The caller treats false as "skip and continue the batch", preserving pagination. */
+private fun installFacebook571FeedCollectionFilter(classLoader: ClassLoader): Boolean {
+    val inspector = fb571FeedItemInspector(classLoader)
+    var resolved = 0
+
+    FB571_FEED_COLLECTION_TARGETS.forEach { target ->
+        val managerClass = runCatching { Class.forName(target.className, false, classLoader) }.getOrNull()
+            ?: return@forEach
+        val method = runCatching {
+            (managerClass.declaredMethods + managerClass.methods).firstOrNull { c ->
+                c.name == target.methodName &&
+                c.parameterCount == 3 &&
+                c.returnType == Boolean::class.javaPrimitiveType &&
+                c.parameterTypes.getOrNull(1)?.name == GRAPHQL_FEED_UNIT_EDGE_CLASS
+            }?.apply { isAccessible = true }
+        }.getOrNull() ?: return@forEach
+
+        resolved++
+        if (!feedCollectionMethodsHooked.add(methodHookKey(method))) return@forEach
+
+        XposedBridge.hookMethod(method, object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                val edge = param.args.getOrNull(1) ?: return
+                if (!inspector.isExplicitlySponsoredFeedEdge(edge)) return
+                param.result = false
+            }
+        })
+    }
+    return resolved > 0
+}
+
+/** Cached feed section sanitiser (X.2mm.A3F): rebuilds the backing ImmutableList field
+ *  with sponsored edges removed BEFORE the section method runs — but keeps the list if
+ *  removal would empty it, so pagination isn't broken. */
+private fun installFacebook571FeedSectionSanitizer(classLoader: ClassLoader): Boolean {
+    val inspector = fb571FeedItemInspector(classLoader)
+    var resolved = 0
+
+    FB571_FEED_SECTION_TARGETS.forEach { target ->
+        val sectionClass = runCatching { Class.forName(target.className, false, classLoader) }.getOrNull()
+            ?: return@forEach
+        val listField = runCatching {
+            sectionClass.getDeclaredField(target.listFieldName).apply { isAccessible = true }
+        }.getOrNull() ?: return@forEach
+        if (!Iterable::class.java.isAssignableFrom(listField.type)) return@forEach
+        val sectionMethod = sectionClass.declaredMethods.firstOrNull { m ->
+            m.name == target.methodName && m.parameterCount == 1 && !m.returnType.isPrimitive
+        }?.apply { isAccessible = true } ?: return@forEach
+
+        resolved++
+        if (!feedSectionMethodsHooked.add(methodHookKey(sectionMethod))) return@forEach
+
+        XposedBridge.hookMethod(sectionMethod, object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                val owner = param.thisObject ?: return
+                val original = runCatching { listField.get(owner) }.getOrNull() as? Iterable<*> ?: return
+                val kept = ArrayList<Any?>(); var removed = 0
+                for (item in original) {
+                    if (inspector.isExplicitlySponsoredFeedEdge(item)) removed++ else kept.add(item)
+                }
+                if (removed == 0) return
+                // Removing everything would break pagination — leave the list untouched.
+                if (kept.isEmpty()) return
+                val rebuilt = buildImmutableListLike(original, kept) ?: return
+                runCatching { listField.set(owner, rebuilt) }
+            }
+        })
+    }
+    return resolved > 0
+}
+
+/** Litho feed component guard (X.2Oc/X.2OT): nulls the render result when the edge on
+ *  the component is definitely sponsored, so the sponsored card never inflates. */
+fun installFacebook571FeedComponentGuard(classLoader: ClassLoader): Boolean {
+    val sectionSanitizerInstalled = installFacebook571FeedSectionSanitizer(classLoader)
+    val inspector = fb571FeedItemInspector(classLoader)
+    var resolvedTargets = 0
+
+    FB571_FEED_COMPONENT_TARGETS.forEach { target ->
+        val componentClass = runCatching { Class.forName(target.componentClassName, false, classLoader) }.getOrNull()
+            ?: return@forEach
+        val wrapperClass = runCatching { Class.forName(target.wrapperClassName, false, classLoader) }.getOrNull()
+            ?: return@forEach
+        val edgeField = runCatching {
+            componentClass.getDeclaredField("A05").apply { isAccessible = true }
+        }.getOrNull() ?: return@forEach
+        val wrapperChildField = runCatching {
+            wrapperClass.getDeclaredField("A03").apply { isAccessible = true }
+        }.getOrNull() ?: return@forEach
+        val renderMethods = listOf(componentClass, wrapperClass).mapNotNull { type ->
+            type.declaredMethods.firstOrNull { m ->
+                m.name == "A1H" && m.parameterCount == target.renderParameterCount && !m.returnType.isPrimitive
+            }?.apply { isAccessible = true }
+        }
+        if (renderMethods.size != 2) return@forEach
+
+        resolvedTargets++
+        renderMethods.forEach { method ->
+            if (!feedComponentMethodsHooked.add(methodHookKey(method))) return@forEach
+            XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    val owner = param.thisObject ?: return
+                    val component = when {
+                        componentClass.isInstance(owner) -> owner
+                        wrapperClass.isInstance(owner) -> runCatching { wrapperChildField.get(owner) }
+                            .getOrNull()?.takeIf(componentClass::isInstance)
+                        else -> null
+                    } ?: return
+                    val edge = runCatching { edgeField.get(component) }.getOrNull() ?: return
+                    if (!inspector.isDefinitelySponsoredFeedItem(edge)) return
+                    param.result = null
+                }
+            })
+        }
+    }
+    return sectionSanitizerInstalled || resolvedTargets > 0
 }
