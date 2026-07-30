@@ -1,5 +1,7 @@
 package io.github.nexalloy.morphe.twitter.timeline.hideHiddenReplies
 
+import app.morphe.extension.shared.Logger
+import io.github.nexalloy.setBooleanField
 import io.github.nexalloy.patch
 
 val HideHiddenReplies = patch(
@@ -7,15 +9,14 @@ val HideHiddenReplies = patch(
     description = "Hides the \"hidden replies\" indicator/entry point on tweets.",
 ) {
     HideHiddenRepliesFingerprint.hookMethod {
-        after { param ->
-            val instance = param.thisObject ?: return@after
+        before { param ->
+            val instance = param.thisObject ?: return@before
             runCatching {
-                val boolField = instance.javaClass.declaredFields
-                    .lastOrNull { it.type == Boolean::class.javaPrimitiveType }
-                    ?: return@after
-                boolField.isAccessible = true
-                boolField.setBoolean(instance, false)
+                instance.setBooleanField("n", false)
+            }.onFailure { e ->
+                Logger.printException({ "[Twitter] HideHiddenReplies: failed to set field" }, e)
             }
         }
     }
 }
+

@@ -11,6 +11,7 @@ val RemovePremiumUpsell = patch(
     dependsOn(FeatureFlagHook)
 
     val flags = listOf(
+        "subscriptions_upsells_premium_home_nav",
         "subscriptions_enabled",
         "subscriptions_upsells_get_verified_profile",
         "subscriptions_upsells_get_verified_drawer_discount_enabled",

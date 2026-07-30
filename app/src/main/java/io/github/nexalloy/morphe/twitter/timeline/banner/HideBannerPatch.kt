@@ -3,17 +3,18 @@ package io.github.nexalloy.morphe.twitter.timeline.banner
 import io.github.nexalloy.patch
 
 /**
- * NOTE: fingerprint only narrows down by class + boolean return type
- * (same as upstream piko, which additionally anchors on a RETURN opcode
- * inside the method). If this class exposes more than one matching
- * boolean method, this may need a stricter fingerprint - please verify
- * the "new posts" banner is actually hidden when testing.
+ * Confirmed via DEX analysis: this class has exactly one method
+ * returning boolean (named "i"), so class + return-type is sufficient
+ * to uniquely match it. The method's first branch reads field "k" via
+ * IF_NEZ to decide whether to even consider showing the banner; we
+ * short-circuit before any of that (and its UI side effects like
+ * NewItemBannerView.d(true)) can run.
  */
 val HideBanner = patch(
     name = "Hide Banner",
     description = "Hides the \"new posts\" banner shown at the top of the timeline.",
 ) {
     HideBannerFingerprint.hookMethod {
-        after { param -> param.result = false }
+        before { param -> param.result = false }
     }
 }

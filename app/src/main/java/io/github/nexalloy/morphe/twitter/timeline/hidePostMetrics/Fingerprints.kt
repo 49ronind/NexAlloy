@@ -9,7 +9,6 @@ internal object InlineActionViewTextFingerprint : Fingerprint(
 )
 
 internal object TweetStatViewTextFingerprint : Fingerprint(
-    definingClass = "Lcom/twitter/ui/tweet/",
     returnType = "V",
     parameters = listOf(
         "Lcom/twitter/ui/tweet/TweetStatView;",
