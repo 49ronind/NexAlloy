@@ -1,13 +1,20 @@
 package io.github.nexalloy.morphe.twitter.timeline.enableVidAutoAdvance
 
-import io.github.nexalloy.morphe.Fingerprint
+import io.github.nexalloy.morphe.findMethodDirect
+import io.github.nexalloy.morphe.twitter.featureFlag.featureFlagPatch.FeatureFlagFingerprint
 
 /**
- * Matches the integer feature-flag getter for the immersive video
- * auto-advance duration threshold. Piko swaps the MOVE_RESULT value right
- * after the flag lookup call; we achieve the same outcome by overwriting
- * the method's own result after it returns.
+ * The auto-advance duration threshold is NOT read through a dedicated
+ * method - it's read through the same shared config-reader class that
+ * FeatureFlagFingerprint already locates (Lcom/twitter/util/config/z;),
+ * via its int(String key, int default) overload. Confirmed via DEX
+ * analysis: the call site is
+ *   Lcom/twitter/util/config/z;->d(Ljava/lang/String;I)I
+ * with key = "immersive_video_auto_advance_duration_threshold".
  */
-internal object EnableVidAutoAdvanceFingerprint : Fingerprint(
-    strings = listOf("immersive_video_auto_advance_duration_threshold"),
-)
+internal val configIntMethodResolved = findMethodDirect {
+    FeatureFlagFingerprint().declaredClass!!.methods.first {
+        it.returnTypeName == "int" && it.paramTypeNames == listOf("java.lang.String", "int")
+    }
+}
+
