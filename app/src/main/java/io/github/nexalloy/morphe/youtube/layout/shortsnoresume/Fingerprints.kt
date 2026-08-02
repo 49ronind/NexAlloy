@@ -52,13 +52,7 @@ val userWasInShortsFingerprint = findMethodDirect {
     }
 }
 
-/**
- * 18.15.40+
- */
 internal object UserWasInShortsConfigFingerprint : Fingerprint(
-    accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.FINAL),
-    returnType = "Z",
-    parameters = listOf(),
     filters = listOf(
         literal(45358360L)
     ),
