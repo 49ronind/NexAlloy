@@ -29,20 +29,19 @@ val AutoCaptions = patch(
         }
     )
 
-    // TODO disableAutoCaptions — SubtitleManagerFingerprint METHOD_MID
-
     onCreateHook.add { AutoCaptionsPatch.newVideoStarted(it) }
 
     StartVideoInformerFingerprint.hookMethod {
         before { AutoCaptionsPatch.videoInformationLoaded() }
     }
 
-    // Disable mute auto captions feature flag.
     if (is_20_26_or_greater) {
         ::featureFlagCheck.hookMethod {
-            after {
-                if (it.args[0] == NO_VOLUME_CAPTIONS_FEATURE_FLAG) {
-                    it.result = AutoCaptionsPatch.disableMuteAutoCaptions(it.result as Boolean)
+            before {
+                // `(it.args[0] as Long)` compares primitives; `it.args[0] == 45692436L`
+                // would box the constant into a fresh Long on every flag read.
+                if ((it.args[0] as Long) == NO_VOLUME_CAPTIONS_FEATURE_FLAG) {
+                    it.result = AutoCaptionsPatch.disableMuteAutoCaptions()
                 }
             }
         }
