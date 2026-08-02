@@ -17,13 +17,8 @@ internal object StartVideoInformerFingerprint : Fingerprint(
     strings = listOf("pc"),
 )
 
-/**
- * YouTube 20.26+
- */
 @RequireAppVersion("20.26.00")
 internal object NoVolumeCaptionsFeatureFlagFingerprint : Fingerprint(
-    accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.FINAL),
-    returnType = "Z",
     filters = listOf(
         literal(45692436L)
     ),
