@@ -25,7 +25,5 @@ internal val kidsBackgroundPlaybackPolicyControllerFingerprint = fingerprint {
     accessFlags(AccessFlags.PUBLIC, AccessFlags.FINAL)
     returns("V")
     parameters("I", "L", "Z")
-    opcodes(
     literal { 45638079L }
-    )
 }
