@@ -1,5 +1,6 @@
 package io.github.nexalloy.revanced.facebook.ad
 
+import io.github.nexalloy.revanced.facebook.ALL_PLUGIN_PACK_TAGS
 import io.github.nexalloy.morphe.findClassDirect
 import io.github.nexalloy.morphe.findMethodDirect
 import io.github.nexalloy.morphe.findMethodListDirect
@@ -95,8 +96,19 @@ val listBuilderClassFingerprint = findClassDirect {
 // ─── Plugin packs ─────────────────────────────────────────────────────────────
 // Upstream now blocks BOTH FbShortsViewerPluginPack AND MarketplaceAdsPluginPack.
 
+// FB 572 plugin packs, all sharing the shape `String BWo()` + `List Bj3()`:
+//   X.7vC -> FbShortsViewerPluginPack   (Reels viewer)      – mixed
+//   X.UDi -> MarketplaceAdsPluginPack   (Marketplace)       – ad-only
+//   X.51E -> AdBreakPluginPack          (feed video ad break) – ad-only  ← NEW
+//   X.4yM -> AdBreakFooterPluginPack    (ad break footer/CTA) – ad-only  ← NEW
+// AdBreakPluginPack builds the mid-roll video ad shown inside a feed video post
+// and was absent from the tag list, leaving that surface unblocked. On 572 the
+// footer pack (X.4yM) has no 0-param List getter, so it simply yields no match —
+// harmless, and emptying X.51E already removes the plugin it attaches to.
+// Tag lists live in FacebookAdHelpers so the fingerprint and the runtime
+// isAdOnlyPluginPack() check can never disagree.
 val pluginPackMethodsFingerprint = findMethodListDirect {
-    listOf("FbShortsViewerPluginPack", "MarketplaceAdsPluginPack").flatMap { tag ->
+    ALL_PLUGIN_PACK_TAGS.flatMap { tag ->
         findClass {
             matcher {
                 methods {
@@ -154,12 +166,52 @@ val indicatorPillAdEligibilityFingerprint = findMethodDirect {
 
 // ─── Reels banner render methods ─────────────────────────────────────────────
 
+// FIXED for FB 572. The old version searched for a METHOD that both takes 1 param
+// and uses the tag string. That worked for ReelsBannerAdsComponent (X.Xnu.A1G),
+// but ReelsBannerAdsNativeComponent (X.Yhh) only carries its tag inside <clinit>
+// — a 0-param method — so the whole native banner component silently went
+// unhooked and its `render(X.272)` kept inflating the overlay card.
+//
+// Now: locate the CLASS by the tag string (anywhere in it, including <clinit>),
+// then take every 1-param Litho render method on that class. Litho render methods
+// are named `render`, `A1G` or `A1H` depending on whether the component is a
+// KComponent or a Spec-generated one, so all three are accepted.
+private val LITHO_RENDER_METHOD_NAMES = setOf("render", "A1G", "A1H")
+
+private val PRIMITIVE_TYPE_NAMES = setOf(
+    "void", "boolean", "byte", "char", "short", "int", "long", "float", "double"
+)
+
+/** A Litho render method always returns a component/tree object, never void or a
+ *  primitive — used to reject same-named helpers on neighbouring classes that the
+ *  class-level string match may also pull in. */
+private fun MethodData.isLithoRenderShape(): Boolean =
+    name in LITHO_RENDER_METHOD_NAMES &&
+        paramTypeNames.size == 1 &&
+        returnTypeName !in PRIMITIVE_TYPE_NAMES &&
+        !returnTypeName.endsWith("[]")
+
 val reelsBannerRenderMethodsFingerprint = findMethodListDirect {
-    listOf("ReelsBannerAdsComponent", "ReelsBannerAdsNativeComponent").flatMap { tag ->
-        findMethod {
+    listOf(
+        "ReelsBannerAdsComponent",
+        "ReelsBannerAdsNativeComponent",
+        "ReelsBannerAdsComponentSpec",
+        "ReelsBannerAdsNativeComponentSpec"
+    ).flatMap { tag ->
+        // class-level match (catches tags that only appear in <clinit>/<init>)
+        val fromClass = findClass {
+            matcher { usingStrings(tag) }
+        }.flatMap { cls ->
+            cls.findMethod {
+                matcher { paramCount = 1 }
+            }.filter { it.isLithoRenderShape() }
+        }
+        // legacy method-level match, kept as a safety net
+        val fromMethod = findMethod {
             matcher { paramCount = 1; usingStrings(tag) }
         }.filter { m -> !m.isConstructor }
-    }.distinctBy { it.descriptor }
+        fromClass + fromMethod
+    }.distinctBy { it.descriptor }.filter { it.isConcreteHookTarget() }
 }
 
 // ─── Profile Reels async ad query ─────────────────────────────────────────────
@@ -302,6 +354,31 @@ val sponsoredPoolAddMethodFingerprint = findMethodDirect {
     }.single()
 }
 
+// FB 572 ships TWO sponsored-pool container adapters, not one:
+//   X.25z -> tagged "SponsoredPoolContainerAdapter" (the old fingerprint finds this)
+//   X.2Cp -> untagged; only identifiable by `String BjG() = "Sponsored Pool"`
+// X.2Cp was completely unhooked, so sponsored edges vended through it still
+// reached the feed. Both classes expose the same two add paths:
+//   boolean A03(GraphQLFeedUnitEdge)   – edge-level add (X.25z only)
+//   boolean A7b(<holder>, <source>)    – the interface add (X.3uQ), on both
+// Returning false from either means "not added", which the caller handles.
+val sponsoredPoolAddMethodsFingerprint = findMethodListDirect {
+    findClass {
+        matcher {
+            methods {
+                matchType = MatchType.Contains
+                add { returnType = "java.lang.String"; paramCount = 0; usingStrings("Sponsored Pool") }
+            }
+        }
+    }.flatMap { cls ->
+        cls.findMethod {
+            matcher { returnType = "boolean"; paramTypes("com.facebook.graphql.model.GraphQLFeedUnitEdge") }
+        } + cls.findMethod {
+            matcher { returnType = "boolean"; paramCount = 2 }
+        }
+    }.distinctBy { it.descriptor }.filter { it.isConcreteHookTarget() }
+}
+
 // ─── Sponsored story manager ──────────────────────────────────────────────────
 // Upstream requires the CLASS to use BOTH strings, then verifies the
 // GraphQLFeedUnitEdge()/0-param method shape exists somewhere in that class.
@@ -358,6 +435,45 @@ val storyAdsInsertionTriggerMethodFingerprint = findMethodDirect {
             // Fallback: first 0-param void method if string not found (obfuscated builds)
             matcher { returnType = "void"; paramCount = 0 }
         }.first()
+}
+
+// ─── Ad-channel network requests (FB 572) ────────────────────────────────────
+// THE single highest-value hook. Facebook fetches sponsored feed/Reels content
+// through a dedicated "ad channel" request that is separate from the organic
+// head/tail loads. In 572 there are two implementations of the same interface
+// method (both `void AbL(X.1hD, X.6Ki)`):
+//
+//   X.1uY.AbL  -> "FeedNetworkController.doAdChannelNetworkRequest"
+//                 (strings: RELATED_ADS, MULTI_ADS, AD_CLICK)
+//   X.54M.AbL  -> "VideoHomeCSRNetworkRequester.doAdChannelNetworkRequest"
+//                 (strings: reels_head, reels_tail, fb_shorts_similar_ad,
+//                  UNIFIED_PLAYER_VDD)
+//
+// Neither was hooked before, which is why full sponsored Reels and feed ads kept
+// arriving no matter how many downstream list filters were installed. Facebook
+// itself ships a no-op branch here ("doAdChannelNetworkRequest disabled, user not
+// logged in"), so short-circuiting the method is a supported code path.
+//
+// The organic loaders on the same classes are AbU (doHeadLoad) and Abe
+// (doTailLoad) — those must NEVER be touched or the feed stops paginating.
+val adChannelRequestMethodsFingerprint = findMethodListDirect {
+    findMethod {
+        matcher {
+            returnType = "void"
+            paramCount = 2
+            usingStrings("doAdChannelNetworkRequest")
+        }
+    }.distinctBy { it.descriptor }.filter { it.isConcreteHookTarget() }
+}
+
+// ─── Reels realtime-intent ad insertion ──────────────────────────────────────
+// VideoHomeDataControllerAdsUtil.maybeInsertFbShortsRealtimeIntentItem — inserts
+// RTI ad items directly into the Reels list, bypassing the CSR pools entirely.
+
+val reelsRealtimeIntentAdInsertFingerprint = findMethodListDirect {
+    findMethod {
+        matcher { usingStrings("VideoHomeDataControllerAdsUtil.maybeInsertFbShortsRealtimeIntentItem") }
+    }.distinctBy { it.descriptor }.filter { it.isConcreteHookTarget() }
 }
 
 // ─── Game ad request methods ──────────────────────────────────────────────────
