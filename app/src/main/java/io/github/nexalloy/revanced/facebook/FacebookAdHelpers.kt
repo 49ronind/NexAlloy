@@ -82,7 +82,10 @@ val FEED_SAFE_CONTAINER_CATEGORY_VALUES = setOf("FB_SHORTS", "MULTI_FB_STORIES_T
 // hooks below rewrite/skip sponsored edges as early as the decoded feed response and
 // the Litho component render, complementing the DexKit-resolved CSR/pool hooks.
 
-/** Item-contract interfaces the FeedItemInspector reflects over to read edge/category. */
+/** Item-contract interfaces the FeedItemInspector reflects over to read edge/category.
+ *  Kept from 571 — both still exist in 572 (X.3YX / X.3Xk, classes2.dex). If the
+ *  inspector ever reports "model=unresolved edge=unresolved" in the log, these are
+ *  the first two names to re-check. */
 val FB571_FEED_ITEM_CONTRACT_CLASSES = listOf("X.3YX", "X.3Xk")
 
 data class NamedHookTarget(val className: String, val methodName: String)
@@ -99,46 +102,61 @@ data class FeedSectionTarget(
     val listFieldName: String
 )
 
-/** Decoded feed-response CSR filter classes (return a result WRAPPER around the list). */
+/** Decoded feed-response CSR filter classes (return a result WRAPPER around the list).
+ *  FB 572: all three CSR filters implement the same interface method
+ *    X.2Mt Ao2(FbUserSession, X.1yt, ImmutableList, int)
+ *  on X.26Y (FeedCSRCacheFilter2026H1), X.Zp1 (FeedCSRCacheFilter) and
+ *  X.Zp2 (FeedCSRCacheFilter2025H1). The old 571 names/method (Ani/Ao4) no longer
+ *  exist as feed classes, so every entry below used to resolve to nothing. */
 val FB571_FEED_CSR_TARGETS = listOf(
-    NamedHookTarget("X.21p", "Ani"),
-    NamedHookTarget("X.baJ", "Ani"),
-    NamedHookTarget("X.baK", "Ani"),
-    NamedHookTarget("X.211", "Ao4"),
-    NamedHookTarget("X.bB9", "Ao4"),
-    NamedHookTarget("X.bBA", "Ao4")
+    NamedHookTarget("X.26Y", "Ao2"),
+    NamedHookTarget("X.Zp1", "Ao2"),
+    NamedHookTarget("X.Zp2", "Ao2")
 )
 
-/** Decoded network feed sanitiser targets (first ImmutableList param). */
+/** Decoded network feed sanitiser targets (first ImmutableList param).
+ *  FB 572: X.1te.A0B(ImmutableList, String) — "cancelVendingTimerAndAddToPool_". */
 val FB571_NETWORK_FEED_TARGETS = listOf(
-    NamedHookTarget("X.1fM", "A0B"),
-    NamedHookTarget("X.1eY", "A0B")
+    NamedHookTarget("X.1te", "A0B")
 )
 
-/** Sponsored-pool add targets — boolean(1-arg) that gets forced to false. */
+/** Sponsored-pool add targets — boolean(1-arg) that gets forced to false.
+ *  FB 572: X.25z.A03(GraphQLFeedUnitEdge). The DexKit path
+ *  (sponsoredPoolAddMethodsFingerprint) also covers X.2Cp, which has no
+ *  hardcoded-name equivalent. */
 val FB571_SPONSORED_POOL_TARGETS = listOf(
-    NamedHookTarget("X.21O", "A03"),
-    NamedHookTarget("X.20a", "A03")
+    NamedHookTarget("X.25z", "A03")
 )
 
-/** Litho feed component guard: (wrapper, component, renderParamCount). */
-val FB571_FEED_COMPONENT_TARGETS = listOf(
-    FeedComponentGuardTarget("X.2Oc", "X.2OT", 1)
-)
+/** Litho feed component guard: (wrapper, component, renderParamCount).
+ *  DISABLED on FB 572. X.2Oc is now a Litho ComponentTree lambda and X.2OT is an
+ *  empty stub — neither carries a GraphQLFeedUnitEdge field, so the guard resolved
+ *  to nothing anyway. Left empty rather than pointing at a wrong class; the CSR +
+ *  collection + ad-channel hooks below cover the same edges earlier in the pipeline. */
+val FB571_FEED_COMPONENT_TARGETS = emptyList<FeedComponentGuardTarget>()
 
-/** Cached feed section sanitiser: (class, method, listField). */
-val FB571_FEED_SECTION_TARGETS = listOf(
-    FeedSectionTarget("X.2mm", "A3F", "A06")
-)
+/** Cached feed section sanitiser: (class, method, listField).
+ *  DISABLED on FB 572 — X.2mm is now a spring-animation class, unrelated to feed. */
+val FB571_FEED_SECTION_TARGETS = emptyList<FeedSectionTarget>()
 
-/** addNewEdgeToCollection filter: (class, method). */
+/** addNewEdgeToCollection filter: (class, method).
+ *  FB 572: moved X.1vr -> X.1xH. Signature is unchanged:
+ *    boolean addNewEdgeToCollection(ImmutableList$Builder, GraphQLFeedUnitEdge, X.1ax)
+ *  X.1vr does not exist at all in 572, so this filter never installed. */
 val FB571_FEED_COLLECTION_TARGETS = listOf(
-    NamedHookTarget("X.1vr", "addNewEdgeToCollection")
+    NamedHookTarget("X.1xH", "addNewEdgeToCollection")
 )
 
-/** Story-ad source provider classes resolved by name on the fast path. */
+/** Story-ad source provider classes resolved by name on the fast path.
+ *  FB 572: X.9gK = FbStoryAdInDiscStoreImpl, with
+ *    B0z(FbUserSession, X.9vC, ImmutableList) -> ImmutableList   (merge)
+ *    AnV(ImmutableList, int) -> void                             (fetchMoreAds)
+ *    Amv(X.9Yq, ImmutableList) -> void                           (deferredUpdate)
+ *    AFV() -> void  ("ads_insertion")                            (insertion trigger)
+ *  The 571 names resolve to unrelated classes in 572 (Runnables, mailbox
+ *  callbacks), so resolveStoryAdProviderHooks returned all-null for each. */
 val FB571_STORY_AD_SOURCE_CLASSES = listOf(
-    "X.9xH", "X.A4W", "X.9zi", "X.A4w", "X.CNo", "X.KJw"
+    "X.9gK"
 )
 
 // Upstream gate: the BROAD feed/reel-CTA text-marker fallbacks below are disabled by
@@ -177,6 +195,26 @@ val REELS_AD_SIGNAL_TOKENS = listOf(
     "unified_player_banner_ad", "banner_ad_"
 )
 
+/** Plugin packs whose ENTIRE content is advertising — their plugin list is
+ *  emptied unconditionally, no per-story inspection needed.
+ *
+ *  FB 572 resolution:
+ *    X.UDi  MarketplaceAdsPluginPack   -> List Bj3()  ✔ hooked
+ *    X.51E  AdBreakPluginPack          -> List Bj3()  ✔ hooked  (feed video ad break)
+ *    X.4yM  AdBreakFooterPluginPack    -> no List getter, so the fingerprint finds
+ *           nothing for it. The tag is kept because the pack does expose one on
+ *           other builds, and an unmatched tag costs nothing. Emptying X.51E
+ *           already removes the ad-break plugin that the footer hangs off. */
+val AD_ONLY_PLUGIN_PACK_TAGS = listOf(
+    "MarketplaceAdsPluginPack", "AdBreakPluginPack", "AdBreakFooterPluginPack"
+)
+
+/** Mixed packs: contain organic plugins too, so they go through the story
+ *  inspector instead of being blanket-emptied. */
+val MIXED_PLUGIN_PACK_TAGS = listOf("FbShortsViewerPluginPack")
+
+val ALL_PLUGIN_PACK_TAGS = MIXED_PLUGIN_PACK_TAGS + AD_ONLY_PLUGIN_PACK_TAGS
+
 val GAME_AD_METHOD_TAGS = listOf(
     "Invalid JSON content received by onGetInterstitialAdAsync: ",
     "Invalid JSON content received by onGetRewardedInterstitialAsync: ",
@@ -210,7 +248,8 @@ private val scheduledGameAdActivityCloses       = Collections.synchronizedMap(We
 private val scheduledAudienceNetworkExitViews   = Collections.synchronizedMap(WeakHashMap<View, Long>())
 private val lastGameAdActivityCloseMs    = AtomicLong(0L)
 private val lastUnavailableGameAdMs      = AtomicLong(0L)
-private val marketplaceAdsPackCache      = ConcurrentHashMap<String, Boolean>()
+private val adOnlyPluginPackCache        = ConcurrentHashMap<String, Boolean>()
+private val adChannelMethodsHooked       = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 
 // ─── Data classes ─────────────────────────────────────────────────────────────
 
@@ -664,7 +703,7 @@ fun hookListResultFilter(method: Method, source: String, inspector: AdStoryInspe
 fun hookPluginPackFallback(method: Method, inspector: AdStoryInspector) {
     XposedBridge.hookMethod(method, object : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) {
-            if (isMarketplaceAdsPluginPack(param.thisObject)) {
+            if (isAdOnlyPluginPack(param.thisObject)) {
                 param.result = arrayListOf<Any?>(); return
             }
             if (inspector.containsAdStory(param.thisObject)) {
@@ -672,20 +711,36 @@ fun hookPluginPackFallback(method: Method, inspector: AdStoryInspector) {
             }
         }
         override fun afterHookedMethod(param: MethodHookParam) {
-            if (isMarketplaceAdsPluginPack(param.thisObject)) return
+            if (isAdOnlyPluginPack(param.thisObject)) return
             val result = param.result as? MutableList<Any?> ?: return
             val removed = filterAdItems(result, inspector)
         }
     })
 }
 
-private fun isMarketplaceAdsPluginPack(instance: Any): Boolean {
+/**
+ * True when the pack's own tag (the 0-param String getter — `BWo()` on FB 572)
+ * is one of [AD_ONLY_PLUGIN_PACK_TAGS].
+ *
+ * The previous version instead accepted any tag merely CONTAINING "Ads", which
+ * both over-matched (any future organic pack with "Ads" in the name) and
+ * under-matched: "AdBreakPluginPack" and "AdBreakFooterPluginPack" contain "Ad"
+ * but not "Ads", so the in-feed video ad break sailed straight through.
+ * Exact tag comparison removes both failure modes.
+ */
+private fun isAdOnlyPluginPack(instance: Any): Boolean {
     val className = instance.javaClass.name
-    return marketplaceAdsPackCache.getOrPut(className) {
+    return adOnlyPluginPackCache.getOrPut(className) {
         runCatching {
             instance.javaClass.declaredMethods
-                .filter { m -> m.parameterCount == 0 && m.returnType == String::class.java && !Modifier.isStatic(m.modifiers) }
-                .any { m -> m.isAccessible = true; (m.invoke(instance) as? String)?.contains("Ads", ignoreCase = true) == true }
+                .filter { m ->
+                    m.parameterCount == 0 && m.returnType == String::class.java &&
+                    !Modifier.isStatic(m.modifiers)
+                }
+                .any { m ->
+                    m.isAccessible = true
+                    (m.invoke(instance) as? String) in AD_ONLY_PLUGIN_PACK_TAGS
+                }
         }.getOrDefault(false)
     }
 }
@@ -764,6 +819,59 @@ fun hookReelsBannerRender(method: Method) {
     XposedBridge.hookMethod(method, object : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) { logHookHitThrottled("reelsBannerRender", method); param.result = null }
     })
+}
+
+// ─── Hook installers – Ad-channel network requests ───────────────────────────
+
+/**
+ * Short-circuits `doAdChannelNetworkRequest`.
+ *
+ * Facebook does not fetch ads as part of the organic feed/Reels response — it
+ * issues a dedicated ad-channel request on the same network controller. On
+ * FB 572 that is `void AbL(X.1hD, X.6Ki)`, implemented by:
+ *
+ *   X.1uY — FeedNetworkController.doAdChannelNetworkRequest        (feed)
+ *   X.54M — VideoHomeCSRNetworkRequester.doAdChannelNetworkRequest (Reels)
+ *
+ * Suppressing the call means the sponsored pools are never fed in the first
+ * place, so every downstream filter (CSR, story pool, list builder, Litho
+ * render) has nothing left to catch. This is the difference between filtering
+ * ads out of a list and never receiving them.
+ *
+ * Facebook ships its own early-return on this method when the user is logged
+ * out, so an empty ad channel is a state the rest of the pipeline already
+ * handles — the feed keeps paginating normally.
+ *
+ * IMPORTANT: the organic loaders `AbU` (doHeadLoad) and `Abe` (doTailLoad) live
+ * on the same classes and must never be hooked. The fingerprint pins the
+ * "doAdChannelNetworkRequest" string precisely to avoid that.
+ */
+fun hookAdChannelRequest(method: Method): Boolean {
+    if (!adChannelMethodsHooked.add(methodHookKey(method))) return false
+    XposedBridge.hookMethod(method, object : XC_MethodHook() {
+        override fun beforeHookedMethod(param: MethodHookParam) {
+            param.result = null
+        }
+    })
+    return true
+}
+
+/**
+ * Blocks `VideoHomeDataControllerAdsUtil.maybeInsertFbShortsRealtimeIntentItem`.
+ *
+ * Realtime-intent ads are pushed into the Reels list directly, bypassing the CSR
+ * pools entirely, so they survive even a fully blocked ad channel. The method is
+ * a void "maybe insert" — skipping it is exactly the negative branch Facebook
+ * already takes when the RTI item is not eligible.
+ */
+fun hookReelsRealtimeIntentAdInsert(method: Method): Boolean {
+    if (!adChannelMethodsHooked.add(methodHookKey(method))) return false
+    XposedBridge.hookMethod(method, object : XC_MethodHook() {
+        override fun beforeHookedMethod(param: MethodHookParam) {
+            param.result = null
+        }
+    })
+    return true
 }
 
 // ─── Hook installers – Sponsored pool ────────────────────────────────────────
