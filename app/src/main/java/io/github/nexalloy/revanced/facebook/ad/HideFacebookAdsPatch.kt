@@ -12,8 +12,6 @@ import io.github.nexalloy.revanced.facebook.FeedCsrFilterHook
 import io.github.nexalloy.revanced.facebook.FeedItemInspector
 import io.github.nexalloy.revanced.facebook.FeedListSanitizerHook
 import io.github.nexalloy.revanced.facebook.NEKO_PLAYABLE_ACTIVITY_CLASS
-import io.github.nexalloy.revanced.facebook.hookAdChannelRequest
-import io.github.nexalloy.revanced.facebook.hookReelsRealtimeIntentAdInsert
 import io.github.nexalloy.revanced.facebook.hookAudienceNetworkRewardFallbacks
 import io.github.nexalloy.revanced.facebook.hookFeedCsrFilterInput
 import io.github.nexalloy.revanced.facebook.hookGameAdActivityLaunchFallbacks
@@ -74,24 +72,6 @@ val HideFacebookAds = patch(
 
     runCatching { installFacebook571FeedSourceFastPath(classLoader) }
     runCatching { installFacebook571FeedComponentGuard(classLoader) }
-
-    // ── 0b. Ad-channel network requests ───────────────────────────────────────
-    // Highest-leverage hook in this patch: Facebook requests sponsored content
-    // over a dedicated ad channel, separate from the organic head/tail loads.
-    // On FB 572 both the feed (FeedNetworkController) and the Reels viewer
-    // (VideoHomeCSRNetworkRequester) expose it as `void AbL(X.1hD, X.6Ki)`.
-    // Suppressing it means no sponsored edge ever enters the pipeline, so the
-    // filters further down have nothing left to miss. Installed before every
-    // other hook so the very first feed/Reels fetch is already covered.
-    ::adChannelRequestMethodsFingerprint.dexMethodList.forEach { dm ->
-        runCatching { hookAdChannelRequest(dm.toMethod()) }
-    }
-
-    // Realtime-intent Reels ads bypass the CSR pools and are inserted directly
-    // into the Reels list, so they survive a blocked ad channel on their own.
-    ::reelsRealtimeIntentAdInsertFingerprint.dexMethodList.forEach { dm ->
-        runCatching { hookReelsRealtimeIntentAdInsert(dm.toMethod()) }
-    }
 
     // ── 1. Ad-kind enum & Reels list-builder ─────────────────────────────────
 
@@ -170,16 +150,6 @@ val HideFacebookAds = patch(
 
     // ── 7. Sponsored pool ─────────────────────────────────────────────────────
 
-    // FB 572 has TWO sponsored-pool container adapters (X.25z, X.2Cp); the old
-    // single-class fingerprint only ever resolved X.25z, so edges vended through
-    // X.2Cp still reached the feed. The plural fingerprint covers both, including
-    // the interface-level `boolean A7b(<holder>, <source>)` add path.
-    ::sponsoredPoolAddMethodsFingerprint.dexMethodList.forEach { dm ->
-        runCatching { hookSponsoredPoolAdd(dm.toMethod()) }
-    }
-    // Legacy single-method fingerprint kept as a fallback for builds where the
-    // "Sponsored Pool" tag getter is absent; hookSponsoredPoolAdd dedups by
-    // method key, so a double resolution installs only one hook.
     runCatching { hookSponsoredPoolAdd(::sponsoredPoolAddMethodFingerprint.method) }
 
     runCatching { hookSponsoredStoryNext(::sponsoredStoryNextMethodFingerprint.method) }
