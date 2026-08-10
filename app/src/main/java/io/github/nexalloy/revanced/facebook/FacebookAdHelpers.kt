@@ -64,82 +64,36 @@ val GAME_AD_ACTIVITY_CLASS_NAMES = setOf(
 
 val HARD_BLOCKED_GAME_AD_ACTIVITY_CLASS_NAMES = setOf(NEKO_PLAYABLE_ACTIVITY_CLASS)
 
+/**
+ * Optional, user-supplied class-name overrides. Nothing is pinned in source: this reads
+ * an optional comma-separated list from the module's shared prefs so a future Facebook
+ * build can be patched without recompiling. Returns an empty set when unset.
+ */
+fun facebookClassNameOverrides(key: String): Set<String> = runCatching {
+    de.robv.android.xposed.XSharedPreferences(
+        io.github.nexalloy.BuildConfig.APPLICATION_ID, "facebook_overrides"
+    ).takeIf { it.file.canRead() }
+        ?.getString(key, null)
+        ?.split(',')
+        ?.map { it.trim() }
+        ?.filter { it.isNotEmpty() }
+        ?.toSet()
+}.getOrNull().orEmpty()
+
 val AUDIENCE_NETWORK_REWARD_COMPLETION_METHOD_NAMES = setOf(
     "onRewardedVideoCompleted", "onRewardedAdCompleted", "onRewardedInterstitialCompleted",
     "onAdComplete", "onAdCompleted"
 )
 
-val AUDIENCE_NETWORK_CLOSE_LISTENER_CLASS_NAMES = setOf("X.mGv", "X.mGo", "p000X.mGv", "p000X.mGo")
+/** Optional runtime override for Audience Network close-listener classes.
+ *  Empty by default: no obfuscated class name is pinned in source any more.
+ *  Populate via the module override list if a future build needs it. */
+val AUDIENCE_NETWORK_CLOSE_LISTENER_CLASS_NAMES: Set<String> = facebookClassNameOverrides("audience_network_close_listener")
 
 val FEED_AD_CATEGORY_VALUES          = setOf("SPONSORED", "PROMOTION", "AD", "ADVERTISEMENT", "BANNER", "ENGAGEMENT_QP")
 val FEED_COLLECTION_AD_CATEGORY_VALUES = setOf("SPONSORED", "PROMOTION", "AD", "ADVERTISEMENT", "BANNER")
 val FEED_SAFE_CONTAINER_CATEGORY_VALUES = setOf("FB_SHORTS", "MULTI_FB_STORIES_TRAY")
 
-// ─── FB 571 hardcoded-class fast-path targets ────────────────────────────────
-// Upstream (installFacebook571FeedSourceFastPath / FeedComponentGuard) resolves these
-// obfuscated feed classes by NAME via Class.forName rather than DexKit — they change
-// per Facebook build but are pinned to the fb571 line this port syncs against. The
-// hooks below rewrite/skip sponsored edges as early as the decoded feed response and
-// the Litho component render, complementing the DexKit-resolved CSR/pool hooks.
-
-/** Item-contract interfaces the FeedItemInspector reflects over to read edge/category. */
-val FB571_FEED_ITEM_CONTRACT_CLASSES = listOf("X.3YX", "X.3Xk")
-
-data class NamedHookTarget(val className: String, val methodName: String)
-
-data class FeedComponentGuardTarget(
-    val wrapperClassName: String,
-    val componentClassName: String,
-    val renderParameterCount: Int
-)
-
-data class FeedSectionTarget(
-    val className: String,
-    val methodName: String,
-    val listFieldName: String
-)
-
-/** Decoded feed-response CSR filter classes (return a result WRAPPER around the list). */
-val FB571_FEED_CSR_TARGETS = listOf(
-    NamedHookTarget("X.21p", "Ani"),
-    NamedHookTarget("X.baJ", "Ani"),
-    NamedHookTarget("X.baK", "Ani"),
-    NamedHookTarget("X.211", "Ao4"),
-    NamedHookTarget("X.bB9", "Ao4"),
-    NamedHookTarget("X.bBA", "Ao4")
-)
-
-/** Decoded network feed sanitiser targets (first ImmutableList param). */
-val FB571_NETWORK_FEED_TARGETS = listOf(
-    NamedHookTarget("X.1fM", "A0B"),
-    NamedHookTarget("X.1eY", "A0B")
-)
-
-/** Sponsored-pool add targets — boolean(1-arg) that gets forced to false. */
-val FB571_SPONSORED_POOL_TARGETS = listOf(
-    NamedHookTarget("X.21O", "A03"),
-    NamedHookTarget("X.20a", "A03")
-)
-
-/** Litho feed component guard: (wrapper, component, renderParamCount). */
-val FB571_FEED_COMPONENT_TARGETS = listOf(
-    FeedComponentGuardTarget("X.2Oc", "X.2OT", 1)
-)
-
-/** Cached feed section sanitiser: (class, method, listField). */
-val FB571_FEED_SECTION_TARGETS = listOf(
-    FeedSectionTarget("X.2mm", "A3F", "A06")
-)
-
-/** addNewEdgeToCollection filter: (class, method). */
-val FB571_FEED_COLLECTION_TARGETS = listOf(
-    NamedHookTarget("X.1vr", "addNewEdgeToCollection")
-)
-
-/** Story-ad source provider classes resolved by name on the fast path. */
-val FB571_STORY_AD_SOURCE_CLASSES = listOf(
-    "X.9xH", "X.A4W", "X.9zi", "X.A4w", "X.CNo", "X.KJw"
-)
 
 // Upstream gate: the BROAD feed/reel-CTA text-marker fallbacks below are disabled by
 // default in FacebookAppAdsRemover (higher false-positive risk than the explicit-card
@@ -318,15 +272,13 @@ class AdStoryInspector(private val adKindEnumClass: Class<*>) {
 // ─── FeedItemInspector ────────────────────────────────────────────────────────
 
 class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
-    private val itemModelAccessor =
-        resolveItemContractAccessor(itemContractTypes, "B1P")
-            ?: resolveItemContractAccessor(itemContractTypes, "B2r") ?: resolveItemModelAccessor(itemContractTypes)
-    private val itemEdgeAccessor =
-        resolveItemContractAccessor(itemContractTypes, "BDp")
-            ?: resolveItemContractAccessor(itemContractTypes, "BG7") ?: resolveItemEdgeAccessor(itemContractTypes)
-    private val itemNetworkAccessor =
-        resolveItemContractAccessor(itemContractTypes, "AqM")
-            ?: resolveItemContractAccessor(itemContractTypes, "ArH") ?: resolveItemNetworkAccessor(itemContractTypes)
+    // Accessors are resolved purely by SHAPE (parameter count + return type), never by
+    // obfuscated method name. Verified against FB 573: the item contract interface
+    // exposes exactly one 0-arg boolean (network), one 0-arg Object (edge) and one
+    // 0-arg model getter, so the type-based resolvers below pick the right ones.
+    private val itemModelAccessor   = resolveItemModelAccessor(itemContractTypes)
+    private val itemEdgeAccessor    = resolveItemEdgeAccessor(itemContractTypes)
+    private val itemNetworkAccessor = resolveItemNetworkAccessor(itemContractTypes)
     private val categoryMethodCache       = ConcurrentHashMap<Class<*>, Method>()
     private val edgeAccessorCache         = ConcurrentHashMap<Class<*>, Method>()
     private val edgeCategoryAccessorCache = ConcurrentHashMap<Class<*>, Method>()
@@ -2370,229 +2322,24 @@ fun resolveStoryAdProviderHooks(
     return StoryAdProviderHooks(providerClass, mergeMethod, fetchMoreAdsMethod, deferredUpdateMethod, resolvedInsertionTrigger)
 }
 
-// ─── FB 571 hardcoded-class fast-path feed hooks ─────────────────────────────
-//
-// Ported 1:1 from upstream FacebookAppAdsRemover's installFacebook571FeedSourceFastPath /
-// installFacebook571FeedComponentGuard chain (BUILD_MARKER fb571_feed_edge_collection_v5).
-// These resolve obfuscated feed classes by NAME via Class.forName rather than DexKit,
-// so they catch sponsored edges at the decoded-response, cached-section, collection,
-// and Litho-component-render stages — complementing the DexKit-resolved hooks in
-// HideFacebookAdsPatch. All logging/tracing/diagnostic code from upstream is omitted.
-//
-// Upstream's Module.java scheduled these across several dex-ready callbacks and retry
-// delays; NexAlloy applies each patch exactly once from PatchExecutor at Application
-// onCreate, so the installers simply run inline from the patch body (see
-// HideFacebookAdsPatch). The per-method dedup sets above still guard against a class
-// being resolved by both this fast path and the DexKit path within the same run.
-
 private fun isFeedListType(type: Class<*>): Boolean =
     Iterable::class.java.isAssignableFrom(type) ||
         type.name == "com.google.common.collect.ImmutableList"
 
-/** Loads the FB571 item-contract interfaces by name; the returned inspector uses them
- *  to read edge/category off decoded feed items. */
-private fun fb571FeedItemInspector(classLoader: ClassLoader): FeedItemInspector {
-    val contractTypes = FB571_FEED_ITEM_CONTRACT_CLASSES.mapNotNull { className ->
-        runCatching { Class.forName(className, false, classLoader) }.getOrNull()
-    }
-    return FeedItemInspector(contractTypes)
-}
-
-/** Master entry: installs the decoded-response fast path + collection filter + section
- *  sanitizer + hardcoded story-ad source providers. Returns true when every component
- *  reported at least one resolvable target (mirrors upstream's &&-combined return). */
-fun installFacebook571FeedSourceFastPath(classLoader: ClassLoader): Boolean {
-    val responseHooksInstalled   = installFacebook571FeedResponseFastPath(classLoader)
-    val collectionFilterInstalled = installFacebook571FeedCollectionFilter(classLoader)
-    val sectionSanitizerInstalled = installFacebook571FeedSectionSanitizer(classLoader)
-
-    val providers = FB571_STORY_AD_SOURCE_CLASSES.mapNotNull { className ->
-        val providerClass = runCatching { Class.forName(className, false, classLoader) }.getOrNull()
-            ?: return@mapNotNull null
-        resolveStoryAdProviderHooks(providerClass, includeInsertionTrigger = false).takeIf { p ->
-            p.mergeMethod != null || p.fetchMoreAdsMethod != null || p.deferredUpdateMethod != null
+// ─── Feed collection edge filter (DexKit-resolved) ───────────────────────────
+// Replaces the former FB571 hardcoded X.1vr.addNewEdgeToCollection fast path. The
+// method name survives ProGuard on every build seen so far, so it is resolved by
+// name + parameter shape via feedCollectionAddEdgeMethodFingerprint instead of by
+// obfuscated class name.
+fun hookFeedCollectionAddEdge(method: Method, inspector: FeedItemInspector) {
+    val edgeIndex = method.parameterTypes.indexOfFirst { it.name == GRAPHQL_FEED_UNIT_EDGE_CLASS }
+        .let { if (it >= 0) it else 1 }
+    if (!feedCollectionMethodsHooked.add(methodHookKey(method))) return
+    XposedBridge.hookMethod(method, object : XC_MethodHook() {
+        override fun beforeHookedMethod(param: MethodHookParam) {
+            val edge = param.args.getOrNull(edgeIndex) ?: return
+            if (!inspector.isExplicitlySponsoredFeedEdge(edge)) return
+            param.result = false
         }
-    }
-    providers.forEach { hookStoryAdProvider(it) }
-
-    return responseHooksInstalled && collectionFilterInstalled && sectionSanitizerInstalled
-}
-
-/** Decoded feed-response CSR + network sanitiser + sponsored-pool add fast path. */
-private fun installFacebook571FeedResponseFastPath(classLoader: ClassLoader): Boolean {
-    val inspector = fb571FeedItemInspector(classLoader)
-
-    val csrHooks = FB571_FEED_CSR_TARGETS.flatMap { target ->
-        val targetClass = runCatching { Class.forName(target.className, false, classLoader) }.getOrNull()
-            ?: return@flatMap emptyList()
-        (targetClass.declaredMethods + targetClass.methods).asSequence()
-            .filter { m ->
-                m.name == target.methodName &&
-                !Modifier.isAbstract(m.modifiers) &&
-                m.parameterTypes.any(::isFeedListType)
-            }
-            .mapNotNull { m ->
-                val preferredIndex = m.parameterTypes.getOrNull(2)?.takeIf(::isFeedListType)?.let { 2 }
-                val listArgIndex = preferredIndex
-                    ?: m.parameterTypes.indexOfFirst(::isFeedListType).takeIf { it >= 0 }
-                    ?: return@mapNotNull null
-                FeedCsrFilterHook(m.apply { isAccessible = true }, listArgIndex)
-            }
-            .toList()
-    }.distinctBy { methodHookKey(it.method) }
-
-    csrHooks.forEach { hookFeedCsrFilterInput(it, inspector) }
-
-    val networkHooks = resolveFacebook571NetworkFeedHooks(classLoader)
-    networkHooks.forEach { hookLateFeedListSanitizer(it, inspector) }
-
-    val sponsoredPoolMethods = resolveFacebook571SponsoredPoolAdds(classLoader)
-    sponsoredPoolMethods.forEach { hookSponsoredPoolAdd(it) }
-
-    return csrHooks.isNotEmpty() && networkHooks.isNotEmpty() && sponsoredPoolMethods.isNotEmpty()
-}
-
-private fun resolveFacebook571NetworkFeedHooks(classLoader: ClassLoader): List<FeedListSanitizerHook> =
-    FB571_NETWORK_FEED_TARGETS.flatMap { target ->
-        val targetClass = runCatching { Class.forName(target.className, false, classLoader) }.getOrNull()
-            ?: return@flatMap emptyList()
-        (targetClass.declaredMethods + targetClass.methods).asSequence()
-            .filter { m ->
-                m.name == target.methodName &&
-                !Modifier.isAbstract(m.modifiers) &&
-                m.parameterTypes.firstOrNull()?.let(::isFeedListType) == true
-            }
-            .map { m -> FeedListSanitizerHook(m.apply { isAccessible = true }, 0) }
-            .toList()
-    }.distinctBy { methodHookKey(it.method) }
-
-private fun resolveFacebook571SponsoredPoolAdds(classLoader: ClassLoader): List<Method> =
-    FB571_SPONSORED_POOL_TARGETS.mapNotNull { target ->
-        val targetClass = runCatching { Class.forName(target.className, false, classLoader) }.getOrNull()
-            ?: return@mapNotNull null
-        (targetClass.declaredMethods + targetClass.methods).firstOrNull { m ->
-            m.name == target.methodName &&
-            !Modifier.isAbstract(m.modifiers) &&
-            m.parameterCount == 1 &&
-            m.returnType == Boolean::class.javaPrimitiveType
-        }?.apply { isAccessible = true }
-    }.distinctBy(::methodHookKey)
-
-/** addNewEdgeToCollection filter: forces false (skip this edge) for explicitly-sponsored
- *  edges. The caller treats false as "skip and continue the batch", preserving pagination. */
-private fun installFacebook571FeedCollectionFilter(classLoader: ClassLoader): Boolean {
-    val inspector = fb571FeedItemInspector(classLoader)
-    var resolved = 0
-
-    FB571_FEED_COLLECTION_TARGETS.forEach { target ->
-        val managerClass = runCatching { Class.forName(target.className, false, classLoader) }.getOrNull()
-            ?: return@forEach
-        val method = runCatching {
-            (managerClass.declaredMethods + managerClass.methods).firstOrNull { c ->
-                c.name == target.methodName &&
-                c.parameterCount == 3 &&
-                c.returnType == Boolean::class.javaPrimitiveType &&
-                c.parameterTypes.getOrNull(1)?.name == GRAPHQL_FEED_UNIT_EDGE_CLASS
-            }?.apply { isAccessible = true }
-        }.getOrNull() ?: return@forEach
-
-        resolved++
-        if (!feedCollectionMethodsHooked.add(methodHookKey(method))) return@forEach
-
-        XposedBridge.hookMethod(method, object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam) {
-                val edge = param.args.getOrNull(1) ?: return
-                if (!inspector.isExplicitlySponsoredFeedEdge(edge)) return
-                param.result = false
-            }
-        })
-    }
-    return resolved > 0
-}
-
-/** Cached feed section sanitiser (X.2mm.A3F): rebuilds the backing ImmutableList field
- *  with sponsored edges removed BEFORE the section method runs — but keeps the list if
- *  removal would empty it, so pagination isn't broken. */
-private fun installFacebook571FeedSectionSanitizer(classLoader: ClassLoader): Boolean {
-    val inspector = fb571FeedItemInspector(classLoader)
-    var resolved = 0
-
-    FB571_FEED_SECTION_TARGETS.forEach { target ->
-        val sectionClass = runCatching { Class.forName(target.className, false, classLoader) }.getOrNull()
-            ?: return@forEach
-        val listField = runCatching {
-            sectionClass.getDeclaredField(target.listFieldName).apply { isAccessible = true }
-        }.getOrNull() ?: return@forEach
-        if (!Iterable::class.java.isAssignableFrom(listField.type)) return@forEach
-        val sectionMethod = sectionClass.declaredMethods.firstOrNull { m ->
-            m.name == target.methodName && m.parameterCount == 1 && !m.returnType.isPrimitive
-        }?.apply { isAccessible = true } ?: return@forEach
-
-        resolved++
-        if (!feedSectionMethodsHooked.add(methodHookKey(sectionMethod))) return@forEach
-
-        XposedBridge.hookMethod(sectionMethod, object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam) {
-                val owner = param.thisObject ?: return
-                val original = runCatching { listField.get(owner) }.getOrNull() as? Iterable<*> ?: return
-                val kept = ArrayList<Any?>(); var removed = 0
-                for (item in original) {
-                    if (inspector.isExplicitlySponsoredFeedEdge(item)) removed++ else kept.add(item)
-                }
-                if (removed == 0) return
-                // Removing everything would break pagination — leave the list untouched.
-                if (kept.isEmpty()) return
-                val rebuilt = buildImmutableListLike(original, kept) ?: return
-                runCatching { listField.set(owner, rebuilt) }
-            }
-        })
-    }
-    return resolved > 0
-}
-
-/** Litho feed component guard (X.2Oc/X.2OT): nulls the render result when the edge on
- *  the component is definitely sponsored, so the sponsored card never inflates. */
-fun installFacebook571FeedComponentGuard(classLoader: ClassLoader): Boolean {
-    val sectionSanitizerInstalled = installFacebook571FeedSectionSanitizer(classLoader)
-    val inspector = fb571FeedItemInspector(classLoader)
-    var resolvedTargets = 0
-
-    FB571_FEED_COMPONENT_TARGETS.forEach { target ->
-        val componentClass = runCatching { Class.forName(target.componentClassName, false, classLoader) }.getOrNull()
-            ?: return@forEach
-        val wrapperClass = runCatching { Class.forName(target.wrapperClassName, false, classLoader) }.getOrNull()
-            ?: return@forEach
-        val edgeField = runCatching {
-            componentClass.getDeclaredField("A05").apply { isAccessible = true }
-        }.getOrNull() ?: return@forEach
-        val wrapperChildField = runCatching {
-            wrapperClass.getDeclaredField("A03").apply { isAccessible = true }
-        }.getOrNull() ?: return@forEach
-        val renderMethods = listOf(componentClass, wrapperClass).mapNotNull { type ->
-            type.declaredMethods.firstOrNull { m ->
-                m.name == "A1H" && m.parameterCount == target.renderParameterCount && !m.returnType.isPrimitive
-            }?.apply { isAccessible = true }
-        }
-        if (renderMethods.size != 2) return@forEach
-
-        resolvedTargets++
-        renderMethods.forEach { method ->
-            if (!feedComponentMethodsHooked.add(methodHookKey(method))) return@forEach
-            XposedBridge.hookMethod(method, object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    val owner = param.thisObject ?: return
-                    val component = when {
-                        componentClass.isInstance(owner) -> owner
-                        wrapperClass.isInstance(owner) -> runCatching { wrapperChildField.get(owner) }
-                            .getOrNull()?.takeIf(componentClass::isInstance)
-                        else -> null
-                    } ?: return
-                    val edge = runCatching { edgeField.get(component) }.getOrNull() ?: return
-                    if (!inspector.isDefinitelySponsoredFeedItem(edge)) return
-                    param.result = null
-                }
-            })
-        }
-    }
-    return sectionSanitizerInstalled || resolvedTargets > 0
+    })
 }
