@@ -146,7 +146,6 @@ val gameAdInstanceTypes  = ConcurrentHashMap<String, String>()
 val gameAdPromiseSnapshots = ConcurrentHashMap<String, GameAdPromiseSnapshot>()
 val recentGameAdTargets  = Collections.synchronizedMap(WeakHashMap<Any, Long>())
 val recentGameAdPayloads = Collections.synchronizedList(ArrayList<GameAdPayloadSnapshot>())
-val hookHitCounters      = ConcurrentHashMap<String, AtomicInteger>()
 private val gameAdResultHooksInstalled         = AtomicInteger(0)
 private val gameAdServiceDispatchHooksInstalled = AtomicInteger(0)
 private val gameAdSurfaceHooksInstalled        = AtomicInteger(0)
@@ -197,6 +196,9 @@ data class GameAdPromiseSnapshot(
 class AdStoryInspector(private val adKindEnumClass: Class<*>) {
     private val enumMethodCache = ConcurrentHashMap<Class<*>, List<Method>>()
     private val fieldCache      = ConcurrentHashMap<Class<*>, List<Field>>()
+    private val allMethodCache      = ConcurrentHashMap<Class<*>, List<Method>>()
+    private val stringMethodCache   = ConcurrentHashMap<Class<*>, List<Method>>()
+    private val overridesToStringCache = ConcurrentHashMap<Class<*>, Boolean>()
 
     fun containsAdStory(
         value: Any?, depth: Int = 0, seen: IdentityHashMap<Any, Boolean> = IdentityHashMap()
@@ -225,7 +227,9 @@ class AdStoryInspector(private val adKindEnumClass: Class<*>) {
         if (seen.put(value, true) != null) return false
         if (value is Iterable<*>) { var n = 0; for (i in value) { if (containsReelsAdSignal(i, depth+1, seen)) return true; if (++n >= 8) break } }
         if (type.isArray) { val a = value as? Array<*>; if (a != null) { var n = 0; for (i in a) { if (containsReelsAdSignal(i, depth+1, seen)) return true; if (++n >= 8) break } } }
-        if (isReelsAdSignalText(runCatching { value.toString() }.getOrNull())) return true
+        // Unoverridden toString() yields "<class name>@<hex hash>"; the class name is
+        // already checked above and a hex hash matches no token, so skip the call.
+        if (overridesToString(type) && isReelsAdSignalText(runCatching { value.toString() }.getOrNull())) return true
         for (m in stringMethodsFor(type)) if (isReelsAdSignalText(runCatching { m.invoke(value) as? String }.getOrNull())) return true
         for (f in fieldsFor(type)) if (containsReelsAdSignal(runCatching { f.get(value) }.getOrNull(), depth+1, seen)) return true
         return false
@@ -252,33 +256,39 @@ class AdStoryInspector(private val adKindEnumClass: Class<*>) {
         }; list
     }
 
-    private fun stringMethodsFor(type: Class<*>) = allMethodsFor(type).asSequence()
-        .filter { m -> m.parameterCount == 0 && m.returnType == String::class.java && m.name != "toString" }
-        .take(12).onEach { it.isAccessible = true }.toList()
+    // Both of these were recomputed for every object visited by the recursive walk —
+    // a full class-hierarchy scan plus a LinkedHashMap and one key String per method,
+    // per node, per feed item. The result only depends on the Class, so it is cached.
+    private fun stringMethodsFor(type: Class<*>) = stringMethodCache.getOrPut(type) {
+        allMethodsFor(type).asSequence()
+            .filter { m -> m.parameterCount == 0 && m.returnType == String::class.java && m.name != "toString" }
+            .take(12).onEach { it.isAccessible = true }.toList()
+    }
 
-    private fun allMethodsFor(type: Class<*>): List<Method> {
+    private fun allMethodsFor(type: Class<*>): List<Method> = allMethodCache.getOrPut(type) {
         val map = LinkedHashMap<String, Method>(); var cur: Class<*>? = type
         while (cur != null && cur != Any::class.java) {
             cur.declaredMethods.forEach { m -> if (!Modifier.isStatic(m.modifiers)) { m.isAccessible = true; map.putIfAbsent("${cur.name}#${m.name}/${m.parameterCount}", m) } }; cur = cur.superclass
-        }; return map.values.toList()
+        }; map.values.toList()
+    }
+
+    private fun overridesToString(type: Class<*>): Boolean = overridesToStringCache.getOrPut(type) {
+        runCatching { type.getMethod("toString").declaringClass != Any::class.java }.getOrDefault(true)
     }
 
     private fun isReelsAdSignalText(v: String?): Boolean {
         if (v.isNullOrBlank()) return false
-        val n = v.lowercase(); return REELS_AD_SIGNAL_TOKENS.any { n.contains(it) }
+        return REELS_AD_SIGNAL_TOKENS.any { v.contains(it, ignoreCase = true) }
     }
 }
 
 // ─── FeedItemInspector ────────────────────────────────────────────────────────
 
 class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
-    // Accessors are resolved purely by SHAPE (parameter count + return type), never by
-    // obfuscated method name. Verified against FB 573: the item contract interface
-    // exposes exactly one 0-arg boolean (network), one 0-arg Object (edge) and one
-    // 0-arg model getter, so the type-based resolvers below pick the right ones.
-    private val itemModelAccessor   = resolveItemModelAccessor(itemContractTypes)
-    private val itemEdgeAccessor    = resolveItemEdgeAccessor(itemContractTypes)
-    private val itemNetworkAccessor = resolveItemNetworkAccessor(itemContractTypes)
+    // NOTE: every cache is declared BEFORE the accessor properties below. Kotlin runs
+    // property initialisers top to bottom, and resolving the accessors already calls
+    // allInstanceMethods() — if its cache were declared later it would still be null at
+    // that moment and the constructor would throw.
     private val categoryMethodCache       = ConcurrentHashMap<Class<*>, Method>()
     private val edgeAccessorCache         = ConcurrentHashMap<Class<*>, Method>()
     private val edgeCategoryAccessorCache = ConcurrentHashMap<Class<*>, Method>()
@@ -287,6 +297,25 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
     private val typeNameMethodCache       = ConcurrentHashMap<Class<*>, Method>()
     private val stringAccessorCache       = ConcurrentHashMap<Class<*>, List<Method>>()
     private val stringFieldCache          = ConcurrentHashMap<Class<*>, List<Field>>()
+    private val allInstanceMethodsCache   = ConcurrentHashMap<Class<*>, List<Method>>()
+    private val overridesToStringCache    = ConcurrentHashMap<Class<*>, Boolean>()
+
+    // Accessors are resolved purely by SHAPE (parameter count + return type), never by
+    // obfuscated method name. Verified against FB 573: the item contract interface
+    // exposes exactly one 0-arg boolean (network), one 0-arg Object (edge) and one
+    // 0-arg model getter, so the type-based resolvers below pick the right ones.
+    private val itemModelAccessor   = resolveItemModelAccessor(itemContractTypes)
+    private val itemEdgeAccessor    = resolveItemEdgeAccessor(itemContractTypes)
+    private val itemNetworkAccessor = resolveItemNetworkAccessor(itemContractTypes)
+
+    private companion object {
+        /** Marker stored for "this class has no such accessor", so misses are cached too. */
+        val NO_ACCESSOR: Method = FeedItemInspector::class.java
+            .getDeclaredMethod("absentAccessorSentinel")
+    }
+
+    @Suppress("unused")
+    private fun absentAccessorSentinel() = Unit
 
     private data class FeedItemFacts(
         val modelCategory: String?,
@@ -480,9 +509,21 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
         return invokeNoThrow(accessor, value) as? String
     }
 
+    /**
+     * Memoises accessor resolution per class — **including misses**.
+     *
+     * Previously a null result was not stored, so every feed item of a class that has no
+     * matching accessor re-ran the resolver on every single call. Those resolvers are
+     * not cheap: [resolveChildAccessor] walks the whole class hierarchy and then
+     * reflectively *invokes* each candidate getter until one matches. On a scrolling
+     * feed that was hundreds of wasted reflective invocations per second, forever.
+     * A miss is now recorded with [NO_ACCESSOR] and costs one map lookup thereafter.
+     */
     private fun cachedMethod(cache: ConcurrentHashMap<Class<*>, Method>, type: Class<*>, resolver: () -> Method?): Method? {
-        cache[type]?.let { return it }; val resolved = resolver() ?: return null
-        return cache.putIfAbsent(type, resolved) ?: resolved
+        cache[type]?.let { return if (it === NO_ACCESSOR) null else it }
+        val resolved = resolver()
+        cache.putIfAbsent(type, resolved ?: NO_ACCESSOR)
+        return resolved
     }
 
     // Excludes "A02"/"BG7" in addition to "clone" — those are the named edge/other
@@ -530,10 +571,18 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
         if (isAdSignalText(type.name)) return true
         if (type.isEnum) return isAdSignalText(value.toString())
         if (type.isPrimitive || value is Number || value is Boolean) return false
-        if (isAdSignalText(runCatching { value.toString() }.getOrNull())) return true
+        // When toString() is not overridden it returns "<class name>@<hex hash>". The
+        // class name was already tested one line above and a hex hash cannot contain any
+        // of the tokens, so calling it would be pure waste — and on GraphQL model
+        // objects an overridden toString can serialise a whole subtree.
+        if (overridesToString(type) && isAdSignalText(runCatching { value.toString() }.getOrNull())) return true
         for (m in stringAccessorsFor(type)) if (isAdSignalText(invokeNoThrow(m, value) as? String)) return true
         for (f in stringFieldsFor(type)) if (isAdSignalText(runCatching { f.get(value) as? String }.getOrNull())) return true
         return false
+    }
+
+    private fun overridesToString(type: Class<*>): Boolean = overridesToStringCache.getOrPut(type) {
+        runCatching { type.getMethod("toString").declaringClass != Any::class.java }.getOrDefault(true)
     }
 
     private fun stringAccessorsFor(type: Class<*>) = stringAccessorCache.getOrPut(type) {
@@ -549,16 +598,27 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
         }; list
     }
 
+    /** Case-insensitive containment without allocating a lowercased copy of every
+     *  candidate string. Same tokens, same result. */
     fun isAdSignalText(value: String?): Boolean {
-        if (value.isNullOrBlank()) return false; val n = value.lowercase()
-        return FEED_AD_SIGNAL_TOKENS.any { n.contains(it) }
+        if (value.isNullOrBlank()) return false
+        return FEED_AD_SIGNAL_TOKENS.any { value.contains(it, ignoreCase = true) }
     }
 
     private fun isSponsoredFeedCategory(v: String?)    = v != null && v in FEED_AD_CATEGORY_VALUES
     private fun isSafeFeedContainerCategory(v: String?) = v != null && v in FEED_SAFE_CONTAINER_CATEGORY_VALUES
     private fun isLikelyAdTypeName(v: String?)          = v != null && (v.contains("QuickPromotion", ignoreCase = true) || isAdSignalText(v))
 
-    private fun allInstanceMethods(type: Class<*>): List<Method> {
+    /**
+     * Memoised: the walk allocates a LinkedHashMap plus one key String per method of the
+     * whole hierarchy, and it was re-run on every resolution attempt. Same result for a
+     * given Class every time, so it is computed once. Order is preserved, so every
+     * "firstOrNull" caller keeps picking exactly the method it picked before.
+     */
+    private fun allInstanceMethods(type: Class<*>): List<Method> =
+        allInstanceMethodsCache.getOrPut(type) { computeAllInstanceMethods(type) }
+
+    private fun computeAllInstanceMethods(type: Class<*>): List<Method> {
         val map = LinkedHashMap<String, Method>(); var cur: Class<*>? = type
         while (cur != null && cur != Any::class.java) {
             cur.declaredMethods.forEach { m -> if (!Modifier.isStatic(m.modifiers)) { m.isAccessible = true; map.putIfAbsent("${cur.name}#${m.name}/${m.parameterCount}", m) } }
@@ -573,9 +633,13 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
 
 // ─── Logging ──────────────────────────────────────────────────────────────────
 
-fun logHookHitThrottled(hookName: String, method: Method, detail: String? = null) {
-    val hits = hookHitCounters.computeIfAbsent(hookName) { AtomicInteger(0) }.incrementAndGet()
-}
+/**
+ * Diagnostics are not wired up in NexAlloy, so this is deliberately empty. It used to
+ * do a ConcurrentHashMap lookup plus an atomic increment on every hook hit and then
+ * throw the number away — measurable overhead on hooks that fire per rendered item.
+ */
+@Suppress("UNUSED_PARAMETER")
+fun logHookHitThrottled(hookName: String, method: Method, detail: String? = null) = Unit
 
 /** Stable per-method key used to dedup hook installation across the DexKit-resolved and
  *  the FB571 hardcoded-name fast paths (both can resolve the same underlying method). */
@@ -708,7 +772,7 @@ fun hookInstreamBannerEligibility(method: Method) {
 
 fun hookIndicatorPillAdEligibility(method: Method) {
     XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) { logHookHitThrottled("indicatorPill", method, "slot=${param.args.getOrNull(2) ?: "?"}"); param.result = false }
+        override fun beforeHookedMethod(param: MethodHookParam) { logHookHitThrottled("indicatorPill", method); param.result = false }
     })
 }
 
