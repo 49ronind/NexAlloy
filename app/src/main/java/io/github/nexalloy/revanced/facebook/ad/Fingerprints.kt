@@ -375,3 +375,49 @@ val gameAdRequestMethodsFingerprint = findMethodListDirect {
         }
     }.distinctBy { it.descriptor }.filter { !it.isConstructor }
 }
+
+// ─── Feed collection edge filter ──────────────────────────────────────────────
+// Replaces FB571_FEED_COLLECTION_TARGETS (was pinned to X.1vr). "addNewEdgeToCollection"
+// is one of the very few feed methods that survives ProGuard with its real name, so it
+// can be matched by name + shape on any build. Verified on FB 573:
+//   X.1vy.addNewEdgeToCollection(ImmutableList$Builder, GraphQLFeedUnitEdge, X.1cS): boolean
+val feedCollectionAddEdgeMethodFingerprint = findMethodDirect {
+    val byShape = findMethod {
+        matcher {
+            name = "addNewEdgeToCollection"
+            returnType = "boolean"
+            paramTypes(null, "com.facebook.graphql.model.GraphQLFeedUnitEdge", null)
+        }
+    }.filter { it.isConcreteHookTarget() }
+
+    byShape.firstOrNull()
+        // Looser fallback: any concrete addNewEdgeToCollection that takes an edge
+        // somewhere in its parameter list (param count/order occasionally shifts).
+        ?: findMethod {
+            matcher { name = "addNewEdgeToCollection"; returnType = "boolean" }
+        }.first {
+            it.isConcreteHookTarget() &&
+                it.paramTypeNames.any { p -> p == "com.facebook.graphql.model.GraphQLFeedUnitEdge" }
+        }
+}
+
+// ─── Story ad source providers (all of them) ──────────────────────────────────
+// Upstream pinned SIX provider classes by name (FB571_STORY_AD_SOURCE_CLASSES) because
+// the single-class DexKit lookup missed the split pipelines. This returns EVERY class
+// that both logs "ads_deletion" and carries the provider shape, so no name is needed.
+// Verified on FB 573: three classes log "ads_deletion", exactly one carries the shape.
+val storyAdsInDiscMethodsFingerprint = findMethodListDirect {
+    findMethod {
+        matcher { usingStrings("ads_deletion") }
+    }.filter { md ->
+        val cls = md.declaredClass ?: return@filter false
+        cls.findMethod {
+            matcher {
+                returnType = "com.google.common.collect.ImmutableList"
+                paramTypes("com.facebook.auth.usersession.FbUserSession", null, "com.google.common.collect.ImmutableList")
+            }
+        }.isNotEmpty() && cls.findMethod {
+            matcher { returnType = "void"; paramTypes(null, "com.google.common.collect.ImmutableList") }
+        }.isNotEmpty()
+    }.distinctBy { it.declaredClass?.name }
+}
