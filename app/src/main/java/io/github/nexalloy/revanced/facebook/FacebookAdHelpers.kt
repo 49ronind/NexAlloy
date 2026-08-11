@@ -680,7 +680,7 @@ fun hookListResultFilter(method: Method, source: String, inspector: AdStoryInspe
 fun hookPluginPackFallback(method: Method, inspector: AdStoryInspector) {
     XposedBridge.hookMethod(method, object : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) {
-            if (isMarketplaceAdsPluginPack(param.thisObject)) {
+            if (isAdOnlyPluginPack(param.thisObject)) {
                 param.result = arrayListOf<Any?>(); return
             }
             if (inspector.containsAdStory(param.thisObject)) {
@@ -688,22 +688,118 @@ fun hookPluginPackFallback(method: Method, inspector: AdStoryInspector) {
             }
         }
         override fun afterHookedMethod(param: MethodHookParam) {
-            if (isMarketplaceAdsPluginPack(param.thisObject)) return
+            if (isAdOnlyPluginPack(param.thisObject)) return
             val result = param.result as? MutableList<Any?> ?: return
             val removed = filterAdItems(result, inspector)
         }
     })
 }
 
-private fun isMarketplaceAdsPluginPack(instance: Any): Boolean {
+/**
+ * True when a video plugin pack or plugin descriptor exists purely to serve ads, in which
+ * case its whole contribution is dropped rather than filtered item by item.
+ *
+ * Decided from the object's OWN name getter rather than from its (obfuscated) class name,
+ * so it works for packs whose name is assembled at runtime. The token list is derived from
+ * pack names observed in a live log, not guessed:
+ *
+ *   emptied  - VideoAdsPluginPack, MarketplaceAdsPluginPack, AdsSmartOverlayPluginPack,
+ *              AdBreakPluginPack, AdBreakFooterPluginPack, PlayableAdOverlayPluginPack,
+ *              InlineVideoAdsFooterPluginPack,
+ *              SmartStates-REELS_DIRECT_MONETIZATION_ADS.pack
+ *   untouched - GrootCore, GrootInlineVideo360, LiveInline, HuddleInline, AudioModeInline,
+ *              ThirtySecondClip, VideoPlayerReliability, WatchTopicsInline,
+ *              ConcurrentViewCount, Videohighlights, Tofu, UnifiedPlayer,
+ *              FbShortsViewer, InlineVideoFooterCue
+ *
+ * Deliberately NOT a bare "Ad": that substring hides inside ordinary words such as
+ * Loading and Adaptive, and matching it would silently disable organic plugins.
+ */
+private fun isAdOnlyPluginPack(instance: Any): Boolean {
     val className = instance.javaClass.name
     return marketplaceAdsPackCache.getOrPut(className) {
         runCatching {
             instance.javaClass.declaredMethods
                 .filter { m -> m.parameterCount == 0 && m.returnType == String::class.java && !Modifier.isStatic(m.modifiers) }
-                .any { m -> m.isAccessible = true; (m.invoke(instance) as? String)?.contains("Ads", ignoreCase = true) == true }
+                .any { m ->
+                    m.isAccessible = true
+                    val name = m.invoke(instance) as? String ?: return@any false
+                    AD_ONLY_PLUGIN_PACK_TOKENS.any { token -> name.contains(token, ignoreCase = true) }
+                }
         }.getOrDefault(false)
     }
+}
+
+/** See [isAdOnlyPluginPack]. */
+val AD_ONLY_PLUGIN_PACK_TOKENS = listOf("Ads", "AdBreak", "AdOverlay")
+
+private val pluginHooksInstalled = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+
+/**
+ * Empties the plugin list of an ads-only pack.
+ *
+ * Hooked on EVERY pack's list getter, then filtered per instance. Two reasons it cannot
+ * be done by fingerprinting pack names instead:
+ *  - some ad packs inherit the getter from a shared base they share with organic packs,
+ *    so the method alone does not identify the pack;
+ *  - some ad pack names are assembled at runtime and no static string can match them.
+ */
+fun hookPluginPackList(method: Method) {
+    if (!pluginHooksInstalled.add(methodHookKey(method))) return
+    XposedBridge.hookMethod(method, object : XC_MethodHook() {
+        override fun afterHookedMethod(param: MethodHookParam) {
+            val instance = param.thisObject ?: return
+            if (!isAdOnlyPluginPack(instance)) return
+            if ((param.result as? Collection<*>)?.isEmpty() == true) return
+            param.result = emptyList<Any?>()
+        }
+    })
+}
+
+/**
+ * Disables an ads-only plugin DESCRIPTOR at its own eligibility gate.
+ *
+ * Descriptors sit one level below packs: a pack lists them, then the player asks each one
+ * whether it applies to the video being played. This is the layer that catches ad plugins
+ * delivered by packs no name-based hook can reach.
+ */
+fun hookPluginDescriptorGate(method: Method) {
+    if (!pluginHooksInstalled.add(methodHookKey(method))) return
+    XposedBridge.hookMethod(method, object : XC_MethodHook() {
+        override fun beforeHookedMethod(param: MethodHookParam) {
+            val instance = param.thisObject ?: return
+            if (!isAdOnlyPluginPack(instance)) return
+            param.result = false
+        }
+    })
+}
+
+/**
+ * Removes ad plugins from a list built by a static builder rather than by a pack object.
+ *
+ * Filters ELEMENT BY ELEMENT and never empties the list wholesale. That distinction is
+ * not cosmetic: the builder this targets is a general video-surface builder that happens
+ * to contain a direct-monetization ads branch — a runtime trace showed one of its methods
+ * returning fifteen plugins, nearly all of them playback controls. Emptying it would
+ * strip the whole player, not the ads.
+ *
+ * Each element is judged by its own name getter, the same test used for packs and
+ * descriptors, so organic plugins in the same list survive untouched.
+ */
+fun hookAdPluginListBuilder(method: Method) {
+    if (!pluginHooksInstalled.add(methodHookKey(method))) return
+    XposedBridge.hookMethod(method, object : XC_MethodHook() {
+        override fun afterHookedMethod(param: MethodHookParam) {
+            val current = param.result as? Iterable<*> ?: return
+            val kept = ArrayList<Any?>()
+            var removed = 0
+            for (plugin in current) {
+                if (plugin != null && isAdOnlyPluginPack(plugin)) removed++ else kept.add(plugin)
+            }
+            if (removed == 0) return
+            param.result = buildImmutableListLike(param.result, kept) ?: return
+        }
+    })
 }
 
 // ─── Hook installers – Feed CSR / late-list ───────────────────────────────────
