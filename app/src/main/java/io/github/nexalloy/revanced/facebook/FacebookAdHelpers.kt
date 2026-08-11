@@ -799,6 +799,20 @@ fun hookAdComponentRender(method: Method) {
     })
 }
 
+/**
+ * Suppresses an ad-fetching query.
+ *
+ * The result is replaced with null rather than an empty object because the callers of
+ * these fetch entry points treat a null as "nothing came back", which is the outcome we
+ * want. If a surface ever hangs waiting on one of these, this is the hook to disable.
+ */
+fun hookAdQueryFetch(method: Method) {
+    if (!pluginHooksInstalled.add(methodHookKey(method))) return
+    XposedBridge.hookMethod(method, object : XC_MethodHook() {
+        override fun beforeHookedMethod(param: MethodHookParam) { param.result = null }
+    })
+}
+
 fun hookAdPluginListBuilder(method: Method) {
     if (!pluginHooksInstalled.add(methodHookKey(method))) return
     XposedBridge.hookMethod(method, object : XC_MethodHook() {
