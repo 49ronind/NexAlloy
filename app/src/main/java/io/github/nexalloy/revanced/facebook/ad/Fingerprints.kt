@@ -291,12 +291,7 @@ val STORY_POOL_TAGS = listOf(
     "FbShortsIFUSponsoredPool",
     "FriendlyFeedSponsoredPool",
     "FbShortsCSRSponsoredSlotQueue",
-    // NOT "FbShortsCSRCacheFilter". It looks like a pool and has the same method shape,
-    // but it is the Shorts CACHE ELIGIBILITY filter: its boolean methods answer "may this
-    // story appear in the Shorts tray at all", for organic stories as much as for ads.
-    // Refusing there empties the whole tray — the feed Reels row renders as a permanently
-    // blank card. Item-awareness does not save it, because the question the method asks
-    // is not "should this ad go in an ad slot".
+    "FbShortsCSRCacheFilter",
 )
 
 val storyPoolAddMethodsFingerprint = findMethodListDirect {
@@ -575,12 +570,6 @@ private val ORGANIC_COMPONENT_MARKERS = listOf(
     "FeedStoryUFIFeedbackSummaryComponent",
     "InlineComposerV2RootComponent",
     "ReactFeedStoryComponent",
-    // Reels / Shorts in-feed unit. Added after a regression: an "…AdsMedia…" tag resolved
-    // to the class that also renders the tray's body wrapper, and the feed Reels row went
-    // blank. Anything rendering these is shared, whatever its ad-sounding tag suggests.
-    "ShowcaseFbShortsBodyWrapperComponent",
-    "ShowcaseFbShortsRootComponent",
-    "FbShortsIfuTileComponent",
 )
 
 private fun MethodData.isRenderShaped(): Boolean =
@@ -715,12 +704,6 @@ val AD_SURFACE_RENDER_TAGS = listOf(
     "FbShortsViewerVideoAdsMusicComponent",
     "FbShortsViewerVideoSponsorLabelComponent",
     "ReelsAdsCaptionCommentComponent",
-    // NOT "ShowcaseFbShortsAdsMediaComponent". It resolves to a class that also renders
-    // ShowcaseFbShortsBodyWrapperComponent and carries "fb_shorts_ifu_tile" — the Reels
-    // in-feed unit tile. Suppressing its render leaves the Reels row in the feed as a
-    // blank card that never fills in. The marker list below now catches it structurally
-    // as well, but the tag is dropped too.
-    // Search results (6)
     "SearchResultsSponsoredStoryBloksCaptionComponent",
     "SearchResultsSponsoredStoryBloksFooterLithoComponent",
     "SearchResultsSponsoredStoryComponent",
