@@ -193,6 +193,26 @@ data class GameAdPromiseSnapshot(
 
 // ─── AdStoryInspector ─────────────────────────────────────────────────────────
 
+/**
+ * Accessors that must never be treated as an ad signal.
+ *
+ * Facebook's GraphQL models expose whole-tree debug serializers — on the build this was
+ * traced, `toExpensiveHumanReadableDebugString()` returns the entire story as JSON. Those
+ * dumps embed the schema's own field names, and Facebook's schema mentions sponsorship on
+ * ordinary stories, so scanning that string for tokens like "sponsored" says true for
+ * essentially EVERY story. That single accessor was the sole match on a profile timeline
+ * story and it is what made ad detection there useless.
+ *
+ * They are also ruinously slow: the name says "Expensive" and it means it — serialising a
+ * full story tree once per rendered post.
+ */
+private val DEBUG_SERIALIZER_NAME_FRAGMENTS = listOf(
+    "DebugString", "toExpensive", "serialize", "toJson", "toJSON", "toRawString", "getRawJson"
+)
+
+private fun isDebugSerializerAccessor(name: String): Boolean =
+    name == "toString" || DEBUG_SERIALIZER_NAME_FRAGMENTS.any { name.contains(it, ignoreCase = true) }
+
 class AdStoryInspector(private val adKindEnumClass: Class<*>) {
     private val enumMethodCache = ConcurrentHashMap<Class<*>, List<Method>>()
     private val fieldCache      = ConcurrentHashMap<Class<*>, List<Field>>()
@@ -261,7 +281,7 @@ class AdStoryInspector(private val adKindEnumClass: Class<*>) {
     // per node, per feed item. The result only depends on the Class, so it is cached.
     private fun stringMethodsFor(type: Class<*>) = stringMethodCache.getOrPut(type) {
         allMethodsFor(type).asSequence()
-            .filter { m -> m.parameterCount == 0 && m.returnType == String::class.java && m.name != "toString" }
+            .filter { m -> m.parameterCount == 0 && m.returnType == String::class.java && !isDebugSerializerAccessor(m.name) }
             .take(12).onEach { it.isAccessible = true }.toList()
     }
 
@@ -382,6 +402,21 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
         val edge = edgeFrom(value) ?: return false
         val edgeCategory = readEdgeCategory(edge) ?: readCategory(edge)
         return edgeCategory != null && edgeCategory in FEED_COLLECTION_AD_CATEGORY_VALUES
+    }
+
+    /** True only when [value] itself exposes a tracking payload naming an ad id, e.g. a
+     *  string accessor returning `{"adid":"1202471980…"}`. Unlike [isSponsoredFeedItem]
+     *  this does not walk into the edge/feedUnit/backendData siblings and does not fall
+     *  back to category or generic ad-signal-token checks — a bare GraphQLStory on the
+     *  profile timeline has no category at all, so those tests answered "ad" for every
+     *  post there. The ad id is the only signal this checks. */
+    fun hasAdTrackingId(value: Any?): Boolean {
+        if (value == null) return false
+        for (m in stringAccessorsFor(value.javaClass)) {
+            val s = invokeNoThrow(m, value) as? String ?: continue
+            if (s.contains("\"adid\"", ignoreCase = true)) return true
+        }
+        return false
     }
 
     fun describe(item: Any?): String {
@@ -587,7 +622,7 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
 
     private fun stringAccessorsFor(type: Class<*>) = stringAccessorCache.getOrPut(type) {
         allInstanceMethods(type).asSequence()
-            .filter { m -> m.parameterCount == 0 && m.returnType == String::class.java && m.declaringClass != Any::class.java && m.name != "toString" }
+            .filter { m -> m.parameterCount == 0 && m.returnType == String::class.java && m.declaringClass != Any::class.java && !isDebugSerializerAccessor(m.name) }
             .take(12).onEach { m -> m.isAccessible = true }.toList()
     }
 
@@ -806,6 +841,41 @@ fun hookAdComponentRender(method: Method) {
  * these fetch entry points treat a null as "nothing came back", which is the outcome we
  * want. If a surface ever hangs waiting on one of these, this is the hook to disable.
  */
+/**
+ * Skips rendering a profile timeline story that carries an advertisement's tracking id.
+ *
+ * Only the render is short-circuited, and only for that one story: the component this
+ * hooks also draws every organic post on the page, so suppressing it wholesale blanks the
+ * profile. Per-story is the only safe granularity here.
+ *
+ * Detection is [FeedItemInspector.hasAdTrackingId] and nothing else. Earlier attempts used
+ * the category test and the token scan; on this surface a story carries no category, and
+ * both tests ended up answering "ad" for every post, which emptied the page three times
+ * over. An ad id is present or it is not.
+ */
+fun hookTimelineStoryRender(method: Method, inspector: FeedItemInspector) {
+    if (!pluginHooksInstalled.add(methodHookKey(method))) return
+    // The story type is derived, not guessed: the component declares a private boolean
+    // guard taking exactly the story it renders, so that parameter names the type, and the
+    // field of that type is the story. "First interface-typed field" would pick the wrong
+    // one — the component holds several unrelated obfuscated fields.
+    val storyType = method.declaringClass.declaredMethods.firstOrNull { candidate ->
+        candidate.returnType == java.lang.Boolean.TYPE && candidate.parameterCount == 1
+    }?.parameterTypes?.firstOrNull() ?: return
+
+    val storyField = method.declaringClass.declaredFields.firstOrNull { field ->
+        !Modifier.isStatic(field.modifiers) && field.type == storyType
+    }?.apply { isAccessible = true } ?: return
+
+    XposedBridge.hookMethod(method, object : XC_MethodHook() {
+        override fun beforeHookedMethod(param: MethodHookParam) {
+            val story = runCatching { storyField.get(param.thisObject) }.getOrNull() ?: return
+            if (!runCatching { inspector.hasAdTrackingId(story) }.getOrDefault(false)) return
+            param.result = null
+        }
+    })
+}
+
 fun hookAdQueryFetch(method: Method) {
     if (!pluginHooksInstalled.add(methodHookKey(method))) return
     XposedBridge.hookMethod(method, object : XC_MethodHook() {
