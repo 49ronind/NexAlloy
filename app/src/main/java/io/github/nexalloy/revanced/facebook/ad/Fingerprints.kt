@@ -291,7 +291,6 @@ val STORY_POOL_TAGS = listOf(
     "FbShortsIFUSponsoredPool",
     "FriendlyFeedSponsoredPool",
     "FbShortsCSRSponsoredSlotQueue",
-    "FbShortsCSRCacheFilter",
 )
 
 val storyPoolAddMethodsFingerprint = findMethodListDirect {
