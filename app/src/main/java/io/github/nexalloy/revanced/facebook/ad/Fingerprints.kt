@@ -3,6 +3,7 @@ package io.github.nexalloy.revanced.facebook.ad
 import io.github.nexalloy.morphe.findClassDirect
 import io.github.nexalloy.morphe.findMethodDirect
 import io.github.nexalloy.morphe.findMethodListDirect
+import org.luckypray.dexkit.DexKitBridge
 import org.luckypray.dexkit.query.enums.MatchType
 import org.luckypray.dexkit.result.MethodData
 import java.lang.reflect.Modifier
@@ -511,4 +512,230 @@ val directMonetizationAdsPluginListFingerprint = findMethodListDirect {
             usingStrings("REELS_DIRECT_MONETIZATION_ADS")
         }
     }.filter { it.isConcreteHookTarget() }.distinctBy { it.descriptor }
+}
+
+
+// ─── Ad-only Litho components ─────────────────────────────────────────────────
+//
+// A component that exists solely to draw an advertisement can be suppressed by making its
+// render return nothing; Litho treats a null layout as "draw nothing". This is a blunt
+// instrument, so three guards stand in front of it.
+
+/**
+ * Return types that prove a 1-argument method is NOT a render.
+ *
+ * Facebook ships generated string-table classes with signatures like `A00(int): String`
+ * that mention nearly every tag in the app. Without this filter, adding tags below would
+ * hook those and corrupt unrelated text. A render always returns a Component or a Section.
+ */
+private val NON_RENDER_RETURN_TYPES = setOf(
+    "java.lang.String", "void", "boolean", "int", "long", "float", "double", "char", "byte", "short"
+)
+
+/**
+ * Components that render ORGANIC content. Any class referencing one of these is shared
+ * infrastructure, not an ad component, even when it also mentions an ad component name —
+ * Facebook's generated feed components carry several names at once.
+ *
+ * This guard is not theoretical. "SponsoredNewsFeedUnitComponent" reads like an ad and is
+ * still in the tag list below, but on this build it resolves to the generic news feed
+ * story component; suppressing it leaves the feed stuck on its loading skeleton forever.
+ * The guard catches it by name-independent means, so the mistake cannot be repeated by
+ * adding a plausible-looking tag.
+ */
+private val ORGANIC_COMPONENT_MARKERS = listOf(
+    "NewsFeedFeedUnitComponent",
+    "FeedGraphQLStoryRootComponent",
+    "FeedNonGraphQLRootStoryComponent",
+    "FeedStoryUFIFeedbackSummaryComponent",
+    "InlineComposerV2RootComponent",
+    "ReactFeedStoryComponent",
+)
+
+private fun MethodData.isRenderShaped(): Boolean =
+    !isConstructor && returnTypeName !in NON_RENDER_RETURN_TYPES
+
+private fun DexKitBridge.rejectSharedFeedComponents(methods: List<MethodData>): List<MethodData> {
+    val shared = ORGANIC_COMPONENT_MARKERS.flatMapTo(mutableSetOf()) { marker ->
+        runCatching { findClass { matcher { usingStrings(marker) } }.map { it.name } }
+            .getOrDefault(emptyList())
+    }
+    return methods.filter { it.className !in shared }
+}
+
+/**
+ * The obfuscated Litho render return type for this build, derived rather than pinned: it
+ * is simply the return type of a render method already located by string. Both the
+ * Component and the Section flavour are resolved this way.
+ */
+private fun DexKitBridge.renderReturnTypeFrom(seedTags: List<String>): String? =
+    seedTags.firstNotNullOfOrNull { tag ->
+        runCatching {
+            findClass { matcher { usingStrings(tag) } }
+                .flatMap { cls -> cls.methods.filter { it.paramTypeNames.size == 1 } }
+                .firstOrNull { it.isRenderShaped() }
+                ?.returnTypeName
+        }.getOrNull()
+    }
+
+/**
+ * Resolves the render method of ad-only components identified by [tags].
+ *
+ * Matching is at CLASS level, not method level. Matching the tag on the render method
+ * itself misses every component whose tag literal lives in a sibling method — the
+ * in-player banner is exactly that: its render carries no string at all, the tag sits in
+ * an eleven-argument setup method on the same class.
+ *
+ * Class-level matching is looser, so the result is narrowed twice: the method must return
+ * the render type derived above (which excludes the string-table classes), and
+ * [rejectSharedFeedComponents] drops anything that also renders organic content.
+ */
+private fun DexKitBridge.adRenderMethodsFor(tags: List<String>, seedTags: List<String>): List<MethodData> {
+    val renderType = renderReturnTypeFrom(seedTags) ?: return emptyList()
+    val methods = tags.flatMap { tag ->
+        runCatching {
+            findClass { matcher { usingStrings(tag) } }.flatMap { cls ->
+                cls.findMethod { matcher { paramCount = 1; returnType = renderType } }
+            }
+        }.getOrDefault(emptyList())
+    }.filter { it.isRenderShaped() }.distinctBy { it.descriptor }
+    return rejectSharedFeedComponents(methods)
+}
+
+val AD_SURFACE_RENDER_TAGS = listOf(
+    // AdBreak (in-stream video) (11)
+    "AdBreakCallToActionButtonComponent",
+    "AdBreakContextCardComponent",
+    "AdBreakContextCardSponsorInfoComponent",
+    "AdBreakContextStoryOverlayComponent",
+    "AdBreakCountdownWithTextComponent",
+    "AdBreakDeferredCTACardComponent",
+    "AdBreakDeferredCTAPoliticalAdSponsorInfoComponent",
+    "AdBreakInPlayerAnimatedSingleImageComponent",
+    "AdBreakNonInterruptiveCardComponent",
+    "AdBreakPostRollEndingScreenComponent",
+    "AdBreakTransitionWithAnimationComponent",
+    // Other (8)
+    "AdsSocialContextComponent",
+    "AdsTextOverlay",
+    "BKBloksAdsUgcPermalinkPostTextComponent",
+    "FacecastLiveVideoAdsStatusPillComponent",
+    "InContentAdsHeaderPillCountdownTimerComponent",
+    "InContentAdsSidebarCountdownTimerComponent",
+    "SponsoredNewsFeedUnitComponent",
+    "bk.action.HideAdsOverlay",
+    // Carousel / horizontal scroll (3)
+    "CarouselAdsAttachmentHScrollComponent",
+    "FbAdsHscrollFooterComponent",
+    "FbAdsHscrollItemComponent",
+    // Multi-ads card (5)
+    "FBMultiAdsFeedUnitKComponent",
+    "MultiAdsAdCardFooterKComponent",
+    "MultiAdsAdCardHeaderKComponent",
+    "MultiAdsAdCardMediaKComponent",
+    "MultiAdsAndBrowseFallbackKComponent",
+    // Shorts / Reels (50)
+    "FbShortsAdsAuthorProfilePictureComponent",
+    "FbShortsAdsAuthorWithFDSComponent",
+    "FbShortsAdsCTAKComponent",
+    "FbShortsAdsCTAStickerComponent",
+    "FbShortsAdsCTMEditableEndSceneKComponent",
+    "FbShortsAdsCreativeProductStickerCTAComponent",
+    "FbShortsAdsCreativeStickerImageComponent",
+    "FbShortsAdsDLPProductCardComponent",
+    "FbShortsAdsDotsCarouselPlayerComponent",
+    "FbShortsAdsHScrollComponent",
+    "FbShortsAdsHscrollAlbumLastCardComponent",
+    "FbShortsAdsIABFragmentWrapperComponent",
+    "FbShortsAdsIABReentryMidsceneCardComponent",
+    "FbShortsAdsIABScreenshotEndSceneComponent",
+    "FbShortsAdsLeadGenFirstQuestionComponent",
+    "FbShortsAdsLeadGenPIIComponent",
+    "FbShortsAdsLeadGenSAQComponent",
+    "FbShortsAdsMidSceneBizAgentComponent",
+    "FbShortsAdsMidSceneSiteExtensionComponent",
+    "FbShortsAdsMidsceneCardComponent",
+    "FbShortsAdsMidsceneContainerComponent",
+    "FbShortsAdsMixedMediaCardKComponent",
+    "FbShortsAdsMixedMediaTileComponent",
+    "FbShortsAdsMultiAdsGridCardComponent",
+    "FbShortsAdsMultiAdsGridComponent",
+    "FbShortsAdsMultiAdsVerticalCardComponent",
+    "FbShortsAdsMultiAdsVerticalComponent",
+    "FbShortsAdsNativeSlideshowImageComponent",
+    "FbShortsAdsNativeSlideshowPlayerComponent",
+    "FbShortsAdsPhotoCardComponent",
+    "FbShortsAdsPhotoKComponent",
+    "FbShortsAdsPostScrollNudgeBizAiAgentComponent",
+    "FbShortsAdsPostScrollNudgeLeadGenPIIComponent",
+    "FbShortsAdsPostScrollNudgeLeadGenSAQComponent",
+    "FbShortsAdsPostScrollNudgeLeadGenSingleSelectComponent",
+    "FbShortsAdsPostScrollNudgeScreenShotComponent",
+    "FbShortsAdsPostScrollNudgeTrustSignalComponent",
+    "FbShortsAdsRealTimeIntentComponent",
+    "FbShortsAdsRtiSingleCardKComponent",
+    "FbShortsAdsStickerCTAComponent",
+    "FbShortsAdsSwipeLeftComponent",
+    "FbShortsAdsXAndBrowseProgressRingComponent",
+    "FbShortsAdsXAndBrowseStartingIndicatorComponent",
+    "FbShortsImageAdsTextOverlayKComponent",
+    "FbShortsShoppableAdsItemComponent",
+    "FbShortsVideoAdsTextOverlayKComponent",
+    "FbShortsViewerVideoAdsMusicComponent",
+    "FbShortsViewerVideoSponsorLabelComponent",
+    "ReelsAdsCaptionCommentComponent",
+    "ShowcaseFbShortsAdsMediaComponent",
+    // Search results (6)
+    "SearchResultsSponsoredStoryBloksCaptionComponent",
+    "SearchResultsSponsoredStoryBloksFooterLithoComponent",
+    "SearchResultsSponsoredStoryComponent",
+    "SearchResultsSponsoredStoryContentComponent",
+    "SearchResultsSponsoredStoryHeaderComponent",
+    "SearchResultsSponsoredStoryMultiShareItemComponent",
+    // Stories viewer (11)
+    "StoryViewerAdsBackgroundImageComponent",
+    "StoryViewerAdsCardStyleMediaComponent",
+    "StoryViewerAdsCollectionPhotoComponent",
+    "StoryViewerAdsExpandableCaptionComponent",
+    "StoryViewerAdsExpandableCarouselOptInComponent",
+    "StoryViewerAdsFollowBySocialContextComponent",
+    "StoryViewerAdsMultiPartComponent",
+    "StoryViewerAdsOptInComponent",
+    "StoryViewerAdsProductHighlightPhotoComponent",
+    "StoryViewerAdsRootContainerComponent",
+    "StoryViewerAdsTopBarComponent",
+    // Video ads CTA / attachment (8)
+    "VideoAdsActionComponent",
+    "VideoAdsAttachmentFooterComponent",
+    "VideoAdsAttachmentFooterTextOptimizedComponent",
+    "VideoAdsButtonComponent",
+    "VideoAdsCallToActionAttachmentActionButtonComponent",
+    "VideoAdsCallToActionComponent",
+    "VideoAdsCallToActionDelayedWrapperComponent",
+    "VideoAdsPageLikeCallToActionComponent",
+    // Watch immersive (3)
+    "WatchSponsoredImmersiveAttachmentCallToActionComponent",
+    "WatchSponsoredImmersiveAttachmentFooterComponent",
+    "WatchSponsoredImmersiveHeaderComponent",
+)
+
+val AD_SECTION_TAGS = listOf(
+    "AdsCommentSection",
+    "BizDiscoCollageSponsoredSection",
+)
+
+val adSurfaceRenderMethodsFingerprint = findMethodListDirect {
+    adRenderMethodsFor(
+        AD_SURFACE_RENDER_TAGS,
+        seedTags = listOf("ReelsBannerAdsComponent", "FbShortsAdsRootKComponent.render", "AdBreakContextCardComponent"),
+    )
+}
+
+/**
+ * Litho Sections rather than Components — a different return type, same idea.
+ * The user's own "Ad Activity" history screen is deliberately excluded: it is a settings
+ * surface for reviewing ads, not an advertisement.
+ */
+val adSectionRenderMethodsFingerprint = findMethodListDirect {
+    adRenderMethodsFor(AD_SECTION_TAGS, seedTags = AD_SECTION_TAGS)
 }
