@@ -291,7 +291,12 @@ val STORY_POOL_TAGS = listOf(
     "FbShortsIFUSponsoredPool",
     "FriendlyFeedSponsoredPool",
     "FbShortsCSRSponsoredSlotQueue",
-    "FbShortsCSRCacheFilter",
+    // NOT "FbShortsCSRCacheFilter". It looks like a pool and has the same method shape,
+    // but it is the Shorts CACHE ELIGIBILITY filter: its boolean methods answer "may this
+    // story appear in the Shorts tray at all", for organic stories as much as for ads.
+    // Refusing there empties the whole tray — the feed Reels row renders as a permanently
+    // blank card. Item-awareness does not save it, because the question the method asks
+    // is not "should this ad go in an ad slot".
 )
 
 val storyPoolAddMethodsFingerprint = findMethodListDirect {
@@ -570,6 +575,12 @@ private val ORGANIC_COMPONENT_MARKERS = listOf(
     "FeedStoryUFIFeedbackSummaryComponent",
     "InlineComposerV2RootComponent",
     "ReactFeedStoryComponent",
+    // Reels / Shorts in-feed unit. Added after a regression: an "…AdsMedia…" tag resolved
+    // to the class that also renders the tray's body wrapper, and the feed Reels row went
+    // blank. Anything rendering these is shared, whatever its ad-sounding tag suggests.
+    "ShowcaseFbShortsBodyWrapperComponent",
+    "ShowcaseFbShortsRootComponent",
+    "FbShortsIfuTileComponent",
 )
 
 private fun MethodData.isRenderShaped(): Boolean =
@@ -704,6 +715,11 @@ val AD_SURFACE_RENDER_TAGS = listOf(
     "FbShortsViewerVideoAdsMusicComponent",
     "FbShortsViewerVideoSponsorLabelComponent",
     "ReelsAdsCaptionCommentComponent",
+    // NOT "ShowcaseFbShortsAdsMediaComponent". It resolves to a class that also renders
+    // ShowcaseFbShortsBodyWrapperComponent and carries "fb_shorts_ifu_tile" — the Reels
+    // in-feed unit tile. Suppressing its render leaves the Reels row in the feed as a
+    // blank card that never fills in. The marker list below now catches it structurally
+    // as well, but the tag is dropped too.
     // Search results (6)
     "SearchResultsSponsoredStoryBloksCaptionComponent",
     "SearchResultsSponsoredStoryBloksFooterLithoComponent",
@@ -803,4 +819,23 @@ val storiesAdsPaginationMethodFingerprint = findMethodListDirect {
             usingStrings("FBStoriesAdsPaginatingQuery")
         }
     }.filter { it.isConcreteHookTarget() }.distinctBy { it.descriptor }
+}
+
+/**
+ * The profile timeline story component's render.
+ *
+ * Suppressing this component wholesale blanks the entire "all posts" section — it draws
+ * organic posts, customised stories and featured highlights as well as ads — so the hook
+ * that uses this decides per story rather than per component.
+ */
+val timelineStoryRenderMethodFingerprint = findMethodDirect {
+    val renderType = renderReturnTypeFrom(
+        listOf("ReelsBannerAdsComponent", "FbShortsAdsRootKComponent.render")
+    ) ?: error("Litho render type not found")
+
+    findClass {
+        matcher { usingStrings("sponsored_timeline_stories_test_key") }
+    }.flatMap { cls ->
+        cls.findMethod { matcher { paramCount = 1; returnType = renderType } }
+    }.first { it.isConcreteHookTarget() }
 }
