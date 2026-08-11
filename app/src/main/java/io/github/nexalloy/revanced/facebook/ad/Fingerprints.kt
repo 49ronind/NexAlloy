@@ -421,3 +421,94 @@ val storyAdsInDiscMethodsFingerprint = findMethodListDirect {
         }.isNotEmpty()
     }.distinctBy { it.declaredClass?.name }
 }
+
+// ─── Video plugin system: packs, descriptors, static builders ─────────────────
+//
+// Everything below targets the layer that serves ads INSIDE a video, as opposed to ads
+// that arrive as their own feed story. A runtime trace established that this layer, and
+// not the ad-break subsystem, is what delivers the sponsored clip that replaces a
+// creator's video and the sponsored card that sits under it: with 21 ad-break resolver
+// accessors and 50 ad-break state machine methods hooked, not one of them was ever called
+// while those ads were on screen.
+//
+// None of these fingerprints pin a pack or descriptor name. They resolve the SHAPE of the
+// plugin API and let the hooks decide per instance, because some ad packs assemble their
+// name at runtime and can never be matched by a literal.
+
+/**
+ * Every plugin-list getter in the video plugin system.
+ *
+ * Resolved by shape from a known pack rather than by method name: the 0-argument List
+ * getter that plugin packs expose. Includes getters inherited from a shared base, which
+ * ad packs and organic packs use in common — hence the per-instance filtering in
+ * [hookPluginPackList].
+ */
+val allPluginPackListMethodsFingerprint = findMethodListDirect {
+    val seed = listOf("FbShortsViewerPluginPack", "MarketplaceAdsPluginPack", "AdBreakPluginPack")
+        .firstNotNullOfOrNull { tag ->
+            runCatching {
+                findClass {
+                    matcher {
+                        methods {
+                            add { returnType = "java.lang.String"; paramCount = 0; usingStrings(tag) }
+                            add { returnType = "java.util.List"; paramCount = 0 }
+                        }
+                    }
+                }.firstOrNull()
+            }.getOrNull()
+        } ?: error("No plugin pack to seed the list-getter shape from")
+
+    val getter = seed.methods.firstOrNull {
+        it.paramTypeNames.isEmpty() && it.returnTypeName == "java.util.List"
+    } ?: error("Plugin pack list getter shape not found")
+
+    findMethod {
+        matcher { name = getter.name; paramCount = 0; returnType = "java.util.List" }
+    }.filter { it.isConcreteHookTarget() }.distinctBy { it.descriptor }
+}
+
+/**
+ * The eligibility gate shared by every video plugin descriptor — the boolean the player
+ * calls to ask a descriptor whether it applies to the current video.
+ *
+ * Shape is learnt from a descriptor known to be ads-only, so the obfuscated method name is
+ * never pinned. There are many implementations (165 on the build this was written
+ * against), which is exactly why [hookPluginDescriptorGate] filters per instance instead
+ * of trying to fingerprint the ad ones.
+ */
+val pluginDescriptorGateMethodsFingerprint = findMethodListDirect {
+    val seed = listOf("PlayableAdOverlayPluginDescriptor", "AdsSmartOverlayPluginDescriptor")
+        .firstNotNullOfOrNull { tag ->
+            runCatching { findClass { matcher { usingStrings(tag) } }.firstOrNull() }.getOrNull()
+        } ?: error("No ad plugin descriptor to seed the gate shape from")
+
+    val gate = seed.methods.firstOrNull {
+        it.returnTypeName == "boolean" &&
+            it.paramTypeNames.size == 4 &&
+            it.paramTypeNames[1] == "com.facebook.video.common.playerorigin.PlayerOrigin"
+    } ?: error("Plugin descriptor gate shape not found")
+
+    findMethod {
+        matcher {
+            name = gate.name
+            returnType = "boolean"
+            paramTypes(null, "com.facebook.video.common.playerorigin.PlayerOrigin", null, null)
+        }
+    }.filter { it.isConcreteHookTarget() }.distinctBy { it.descriptor }
+}
+
+/**
+ * Direct-monetization ad plugins — the in-video ads a creator monetises with.
+ *
+ * These come from a plain static builder rather than from a pack object, so neither a
+ * pack-level nor a descriptor-level hook reaches them; the builder is matched by the one
+ * literal it carries.
+ */
+val directMonetizationAdsPluginListFingerprint = findMethodListDirect {
+    findMethod {
+        matcher {
+            returnType = "com.google.common.collect.ImmutableList"
+            usingStrings("REELS_DIRECT_MONETIZATION_ADS")
+        }
+    }.filter { it.isConcreteHookTarget() }.distinctBy { it.descriptor }
+}

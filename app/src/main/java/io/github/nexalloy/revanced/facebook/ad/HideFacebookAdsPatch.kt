@@ -27,7 +27,10 @@ import io.github.nexalloy.revanced.facebook.hookLateFeedListSanitizer
 import io.github.nexalloy.revanced.facebook.hookListBuilderAppend
 import io.github.nexalloy.revanced.facebook.hookListResultFilter
 import io.github.nexalloy.revanced.facebook.hookPlayableAdActivity
+import io.github.nexalloy.revanced.facebook.hookAdPluginListBuilder
+import io.github.nexalloy.revanced.facebook.hookPluginDescriptorGate
 import io.github.nexalloy.revanced.facebook.hookPluginPackFallback
+import io.github.nexalloy.revanced.facebook.hookPluginPackList
 import io.github.nexalloy.revanced.facebook.hookReelsBannerRender
 import io.github.nexalloy.revanced.facebook.hookSponsoredPoolAdd
 import io.github.nexalloy.revanced.facebook.hookSponsoredPoolListMethods
@@ -104,6 +107,29 @@ val HideFacebookAds = patch(
             runCatching { hookPluginPackFallback(dm.toMethod(), storyInspector) }
         }
     }
+
+    // ── 2b. In-video ads: the video plugin system ─────────────────────────────
+    //
+    // Ads served inside a video rather than as their own feed story. Three layers,
+    // because Facebook delivers them by three different routes:
+    //
+    //   packs       - a pack whose whole purpose is ads; its plugin list is emptied
+    //   descriptors - individual ad plugins carried by a pack that also carries organic
+    //                 ones, or by a pack whose name is built at runtime; each is refused
+    //                 at its own eligibility gate
+    //   builders    - ad plugins assembled by a static builder with no pack object at all
+    //
+    // All three filter per instance, so organic packs, descriptors and plugins are never
+    // touched. Nothing here pins an obfuscated name.
+
+    runCatching { ::allPluginPackListMethodsFingerprint.dexMethodList }.getOrNull().orEmpty()
+        .forEach { dm -> runCatching { hookPluginPackList(dm.toMethod()) } }
+
+    runCatching { ::pluginDescriptorGateMethodsFingerprint.dexMethodList }.getOrNull().orEmpty()
+        .forEach { dm -> runCatching { hookPluginDescriptorGate(dm.toMethod()) } }
+
+    runCatching { ::directMonetizationAdsPluginListFingerprint.dexMethodList }.getOrNull().orEmpty()
+        .forEach { dm -> runCatching { hookAdPluginListBuilder(dm.toMethod()) } }
 
     // ── 2. Instream banner & indicator pill ───────────────────────────────────
 
