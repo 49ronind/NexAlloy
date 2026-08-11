@@ -2,6 +2,7 @@ package io.github.nexalloy.revanced.facebook.ad
 
 import io.github.nexalloy.patch
 import io.github.nexalloy.revanced.facebook.hookAdComponentRender
+import io.github.nexalloy.revanced.facebook.hookAdQueryFetch
 
 /**
  * Suppresses ad-only Litho components across every surface found in the app: Shorts and
@@ -38,4 +39,13 @@ val HideFacebookAdComponents = patch(
 
     runCatching { ::adSectionRenderMethodsFingerprint.dexMethodList }.getOrNull().orEmpty()
         .forEach { dm -> runCatching { hookAdComponentRender(dm.toMethod()) } }
+
+    // Stories ads. Resolved structurally, by the AdStory field a component carries,
+    // rather than from a list of component names.
+    runCatching { ::storyAdComponentRenderMethodsFingerprint.dexMethodList }.getOrNull().orEmpty()
+        .forEach { dm -> runCatching { hookAdComponentRender(dm.toMethod()) } }
+
+    // Stop requesting story ads in the first place, so none of the UI above is ever built.
+    runCatching { ::storiesAdsPaginationMethodFingerprint.dexMethodList }.getOrNull().orEmpty()
+        .forEach { dm -> runCatching { hookAdQueryFetch(dm.toMethod()) } }
 }

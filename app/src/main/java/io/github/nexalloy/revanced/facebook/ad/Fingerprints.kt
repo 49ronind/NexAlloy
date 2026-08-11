@@ -274,8 +274,28 @@ val lateFeedListMethodsFingerprint = findMethodListDirect {
 
 // ─── Story pool add ───────────────────────────────────────────────────────────
 
+/**
+ * Pools and queues that admit a story into an ad slot.
+ *
+ * Safe to widen freely: the hook that consumes this is item-aware — it inspects the story
+ * being offered and only refuses one it can positively identify as sponsored. A tag that
+ * turns out to hold organic stories therefore costs nothing, which is why the Shorts and
+ * Friendly-feed sponsored pools are included even though their exact semantics were never
+ * confirmed at runtime.
+ */
+val STORY_POOL_TAGS = listOf(
+    "CSRStoryPoolCoordinator",
+    "FeedStoryPoolCoordinator",
+    "FbShortsSponsoredPool",
+    "FBShortsSponsoredPool",
+    "FbShortsIFUSponsoredPool",
+    "FriendlyFeedSponsoredPool",
+    "FbShortsCSRSponsoredSlotQueue",
+    "FbShortsCSRCacheFilter",
+)
+
 val storyPoolAddMethodsFingerprint = findMethodListDirect {
-    listOf("CSRStoryPoolCoordinator", "FeedStoryPoolCoordinator").flatMap { tag ->
+    STORY_POOL_TAGS.flatMap { tag ->
         findClass { matcher { usingStrings(tag) } }.flatMap { cls ->
             cls.findMethod { matcher { returnType = "boolean"; paramCount = 1 } }
         }
@@ -738,4 +758,50 @@ val adSurfaceRenderMethodsFingerprint = findMethodListDirect {
  */
 val adSectionRenderMethodsFingerprint = findMethodListDirect {
     adRenderMethodsFor(AD_SECTION_TAGS, seedTags = AD_SECTION_TAGS)
+}
+
+
+// ─── Stories ads ──────────────────────────────────────────────────────────────
+// Sponsored slides between friends' stories. Anchored on a real, unobfuscated class name
+// rather than on anything version-specific.
+
+private const val AD_STORY_CLASS = "com.facebook.audience.snacks.model.AdStory"
+
+/**
+ * Litho components holding an [AD_STORY_CLASS] field — the caption, label, CTA and overlay
+ * pieces of a story ad. Structural rather than tag-based, so it needs no per-component
+ * list and does not go stale when Facebook renames things.
+ */
+val storyAdComponentRenderMethodsFingerprint = findMethodListDirect {
+    val renderType = renderReturnTypeFrom(
+        listOf("ReelsBannerAdsComponent", "FbShortsAdsRootKComponent.render")
+    ) ?: return@findMethodListDirect emptyList()
+
+    val methods = runCatching {
+        findClass {
+            matcher { fields { add { type = AD_STORY_CLASS } } }
+        }.flatMap { cls ->
+            cls.findMethod { matcher { paramCount = 1; returnType = renderType } }
+        }
+    }.getOrDefault(emptyList()).filter { it.isRenderShaped() }.distinctBy { it.descriptor }
+
+    rejectSharedFeedComponents(methods)
+}
+
+/**
+ * The Stories ad pagination fetch — stops story ads being requested at all, which is
+ * cheaper and less visible than removing them once they have arrived.
+ */
+val storiesAdsPaginationMethodFingerprint = findMethodListDirect {
+    findMethod {
+        matcher {
+            paramTypes(
+                "com.facebook.auth.usersession.FbUserSession",
+                null,
+                "com.google.common.collect.ImmutableList",
+                "com.google.common.collect.ImmutableList"
+            )
+            usingStrings("FBStoriesAdsPaginatingQuery")
+        }
+    }.filter { it.isConcreteHookTarget() }.distinctBy { it.descriptor }
 }
