@@ -786,6 +786,19 @@ fun hookPluginDescriptorGate(method: Method) {
  * Each element is judged by its own name getter, the same test used for packs and
  * descriptors, so organic plugins in the same list survive untouched.
  */
+/**
+ * Suppresses a Litho component or section whose only purpose is drawing an ad, by
+ * short-circuiting its render to null — Litho treats a null layout as "draw nothing".
+ *
+ * Deduplicated, because several tags legitimately resolve to the same render method.
+ */
+fun hookAdComponentRender(method: Method) {
+    if (!pluginHooksInstalled.add(methodHookKey(method))) return
+    XposedBridge.hookMethod(method, object : XC_MethodHook() {
+        override fun beforeHookedMethod(param: MethodHookParam) { param.result = null }
+    })
+}
+
 fun hookAdPluginListBuilder(method: Method) {
     if (!pluginHooksInstalled.add(methodHookKey(method))) return
     XposedBridge.hookMethod(method, object : XC_MethodHook() {
