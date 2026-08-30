@@ -11,6 +11,7 @@ import io.github.nexalloy.morphe.twitter.timeline.forceTranslate.ForceTranslate
 import io.github.nexalloy.morphe.twitter.timeline.removePremiumUpsell.RemovePremiumUpsell
 import io.github.nexalloy.morphe.twitter.timeline.sensitivemediasettings.ShowSensitiveMedia
 import io.github.nexalloy.morphe.twitter.timeline.showpollresults.ShowPollResults
+import io.github.nexalloy.morphe.twitter.timeline.banner.HideBanner
 
 val TwitterPatches: Array<Patch> = arrayOf(
     // Ads / recommendations
@@ -30,4 +31,5 @@ val TwitterPatches: Array<Patch> = arrayOf(
     ForceTranslate,
     ShowSensitiveMedia,
     ShowPollResults,
+    HideBanner,
 )
