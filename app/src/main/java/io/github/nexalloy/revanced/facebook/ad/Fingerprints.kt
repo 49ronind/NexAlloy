@@ -1398,6 +1398,114 @@ val searchAiModeAdsQueryFingerprint = findMethodListDirect {
 // Each is additionally constrained by return type, because the hook that consumes it
 // has to be able to produce a value the caller can use.
 
+// ─── Tầng chặn request: MỘT lượt quét chung ──────────────────────────────────
+//
+// Mọi fingerprint của [BlockFacebookAdRequests] neo vào chuỗi đều được trả lời trong đúng
+// MỘT `batchFindMethodUsingStrings`, cộng đúng MỘT `batchFindClassUsingStrings` cho hai
+// mỏ neo ở mức class. Trước đây là 19 lượt duyệt toàn cục — mỗi lượt tốn sàn ~110 ms vì
+// phải đi hết string index — nay còn 2.
+//
+// Đây chính là kỹ thuật mà [classesUsingAnyOf] đã dùng để kéo tầng component từ 24 s
+// xuống dưới 1 s, chỉ là trước đây chưa áp cho tầng request. Điểm khác biệt duy nhất so
+// với các fingerprint cũ: ràng buộc hình dạng (kiểu trả về, số tham số) không còn nằm
+// trong matcher mà được áp bằng Kotlin sau đó, trên đúng nhúm method mang tag — cùng một
+// phép thử, chỉ chạy trên tập nhỏ hơn rất nhiều.
+//
+// Hai mỏ neo `FeedAsyncAdsController.*` được dùng lại làm seed cho lớp cơ sở ad-channel
+// thay vì hỏi lại DexKit, nên hai lượt duyệt trùng lặp trước đây cũng biến mất.
+//
+// Group nào mang NHIỀU chuỗi thì `StringMatchersGroup` hiểu là AND — đó là cách hai mỏ neo
+// của trình phát toàn màn hình được diễn đạt, vốn cần đúng ngữ nghĩa "đi cùng nhau" mà
+// chú thích của chúng đã giải thích.
+
+private const val TAG_FEED_ASYNC_DO_REQUEST = "FeedAsyncAdsController.doAsyncAdRequest"
+private const val TAG_FEED_ASYNC_MAYBE_REQUEST = "FeedAsyncAdsController.maybeDoAdChannelRequest"
+private const val TAG_FEED_ASYNC_ON_NEXT = "FeedAsyncAdsController.onNext"
+private const val TAG_STORY_VIEWER_FETCH_MORE = "StoryViewerAdsPaginatingDataManager.fetchMoreAds"
+private const val TAG_AD_BUCKET_FETCH = "AdPaginatingBucketStaticInsertionDataSource.fetchAds"
+private const val TAG_AD_BUCKET_FETCH_MORE = "AdPaginatingBucketStaticInsertionDataSource.fetchMoreAds"
+private const val TAG_REELS_VIDEO_ADS_QUERY = "FBFetchReelsVideoAdsQuery"
+private const val TAG_VIDEO_HOME_RTI_INSERT =
+    "VideoHomeDataControllerAdsUtil.maybeInsertFbShortsRealtimeIntentItem"
+private const val TAG_POS_ONE_ELIGIBLE = "NewsFeedPosOneAdStats.isPosOneAdEligibleInSession"
+private const val TAG_FEED_NETWORK_AD_CHANNEL = "FeedNetworkController.doAdChannelNetworkRequest"
+private const val TAG_VIDEO_HOME_AD_CHANNEL = "VideoHomeCSRNetworkRequester.doAdChannelNetworkRequest"
+private const val TAG_EXTRA_SPONSORED_FETCH =
+    "AdsChannelNetworkHandlerHelper.doFetchAdditionalSponsoredStoriesFromNetwork"
+private const val TAG_ASYNC_ADS_TAIL_LOAD = "MainFeedCSRDataLoaderImpl.maybeDoAsyncAdsTailLoad"
+private const val TAG_VIDEO_HOME_INSERT_ADS = "VideoHomeDataControllerImpl.maybeInsertAds"
+private const val TAG_VIDEO_HOME_FETCH_ADS = "VideoHomeDataFetcher.fetchAds"
+private const val TAG_VIDEO_HOME_RTI_RENDER =
+    "VideoHomeDataControllerImpl.renderFbShortsRealtimeIntentAds"
+private const val TAG_VIDEO_HOME_MIDCARD_SURVEY =
+    "VideoHomeDataControllerImpl.maybeTriggerFbShortsAdsMidCardSurveyRequest"
+private const val TAG_STORY_VIEWER_FETCH_PAYLOAD =
+    "StoryViewerAdsPaginatingDataManager.fetchAdsWithPayload"
+private const val TAG_AD_BUCKET_BUILD_PAYLOAD =
+    "AdPaginatingBucketStaticInsertionDataSource.buildAdsRequestPayload"
+private const val TAG_SEARCH_AI_AD_STORY = "SearchAIModeAdStoryQuery"
+private const val TAG_ADS_SUBSCRIBER_ON_NEXT = "AdsChannelRequestSubscriber.onNext"
+private const val TAG_CACHED_AD_DATA_PARAMS = "FetchNewsFeedMethod.addCachedAdDataParams"
+private const val TAG_RERANK_WHEN_ADDING = "FeedSponsoredStoryHolder.rerankWhenAddingStory"
+
+private const val TAG_ASYNC_ADS_REQUEST_TYPE = "async_ads_request_type"
+private const val TAG_DEEP_DIVE_SURFACE = "fb_shorts_video_deep_dive"
+private const val TAG_SFD_CHAINING = "sfd_chaining"
+
+private const val GROUP_DEEP_DIVE_ASYNC = "deepDiveAsyncAdRequest"
+private const val GROUP_DEEP_DIVE_CHAIN = "deepDiveChainAd"
+
+private const val IMMUTABLE_LIST = "com.google.common.collect.ImmutableList"
+
+/** Kết quả của lượt quét chung, đã nhóm sẵn theo tag. */
+private class BlockRequestScan(
+    private val methodHits: Map<String, List<MethodData>>,
+    private val classHits: Map<String, List<ClassData>>,
+) {
+    /** Hợp của các group đã cho, khử trùng theo descriptor. */
+    fun tagged(vararg groups: String): List<MethodData> =
+        groups.flatMap { methodHits[it].orEmpty() }.distinctBy { it.descriptor }
+
+    fun classesFor(group: String): List<ClassData> = classHits[group].orEmpty()
+}
+
+/**
+ * Một `batchFindMethodUsingStrings` cho toàn bộ [spec]; khoá của map là tên group, giá trị
+ * là các chuỗi mà method phải mang ĐỦ (AND).
+ *
+ * Lùi về vòng lặp từng group nếu API batch hỏng, để một bản DexKit không có batch API thì
+ * suy giảm thành hành vi cũ chứ không thành rỗng — giống hệt [methodsUsingAnyOf].
+ */
+private fun DexKitBridge.batchMethodGroups(
+    spec: Map<String, List<String>>
+): Map<String, List<MethodData>> {
+    if (spec.isEmpty()) return emptyMap()
+    runCatching { batchFindMethodUsingStrings { groups(spec) } }.getOrNull()?.let { batched ->
+        return batched.mapValues { (_, hits) -> hits.distinctBy { it.descriptor } }
+    }
+    return spec.mapValues { (_, strings) ->
+        runCatching {
+            findMethod { matcher { usingStrings(strings) } }.distinctBy { it.descriptor }
+        }.getOrDefault(emptyList())
+    }
+}
+
+/** Bản mức class của [batchMethodGroups]. */
+private fun DexKitBridge.batchClassGroups(
+    spec: Map<String, List<String>>
+): Map<String, List<ClassData>> {
+    if (spec.isEmpty()) return emptyMap()
+    runCatching { batchFindClassUsingStrings { groups(spec) } }.getOrNull()?.let { batched ->
+        return batched.mapValues { (_, hits) -> hits.distinctBy { it.descriptor } }
+    }
+    return spec.mapValues { (_, strings) ->
+        runCatching {
+            findClass { matcher { usingStrings(strings) } }.distinctBy { it.descriptor }
+        }.getOrDefault(emptyList())
+    }
+}
+
+
 /**
  * The news feed's asynchronous ad channel.
  *
@@ -1411,14 +1519,8 @@ val searchAiModeAdsQueryFingerprint = findMethodListDirect {
  *  - `doAsyncAdRequest`, the request itself;
  *  - `maybeDoAdChannelRequest`, the newer gate that decides to make one.
  */
-val feedAsyncAdRequestMethodsFingerprint = findMethodListDirect {
-    methodsUsingAnyOf(
-        listOf(
-            "FeedAsyncAdsController.doAsyncAdRequest",
-            "FeedAsyncAdsController.maybeDoAdChannelRequest",
-        )
-    ).filter { it.returnTypeName == "void" && it.isConcreteHookTarget() }.distinctBy { it.descriptor }
-}
+private fun BlockRequestScan.resolveFeedAsyncAdRequest(): List<MethodData> =
+    tagged(TAG_FEED_ASYNC_DO_REQUEST, TAG_FEED_ASYNC_MAYBE_REQUEST).filter { it.returnTypeName == "void" && it.isConcreteHookTarget() }
 
 /**
  * Where the ad channel's response is turned into feed edges.
@@ -1428,14 +1530,9 @@ val feedAsyncAdRequestMethodsFingerprint = findMethodListDirect {
  * response already in flight would still be spliced in. Returns the empty list, which is
  * what the caller sees on every request that legitimately finds no ad to serve.
  */
-val feedAsyncAdResultMethodsFingerprint = findMethodListDirect {
-    findMethod {
-        matcher {
-            returnType = "com.google.common.collect.ImmutableList"
-            usingStrings("FeedAsyncAdsController.onNext")
-        }
-    }.filter { it.isConcreteHookTarget() }.distinctBy { it.descriptor }
-}
+private fun BlockRequestScan.resolveFeedAsyncAdResult(): List<MethodData> =
+    tagged(TAG_FEED_ASYNC_ON_NEXT)
+        .filter { it.returnTypeName == IMMUTABLE_LIST && it.isConcreteHookTarget() }
 
 /**
  * The Stories viewer's ad pagination, on the data-manager side.
@@ -1445,15 +1542,9 @@ val feedAsyncAdResultMethodsFingerprint = findMethodListDirect {
  * paginating source that does not. That one holds its own ad buckets and refills them
  * itself, so it kept inserting sponsored slides between friends' stories.
  */
-val storyViewerAdsFetchMethodsFingerprint = findMethodListDirect {
-    methodsUsingAnyOf(
-        listOf(
-            "StoryViewerAdsPaginatingDataManager.fetchMoreAds",
-            "AdPaginatingBucketStaticInsertionDataSource.fetchAds",
-            "AdPaginatingBucketStaticInsertionDataSource.fetchMoreAds",
-        )
-    ).filter { it.returnTypeName == "void" && it.isConcreteHookTarget() }.distinctBy { it.descriptor }
-}
+private fun BlockRequestScan.resolveStoryViewerAdsFetch(): List<MethodData> =
+    tagged(TAG_STORY_VIEWER_FETCH_MORE, TAG_AD_BUCKET_FETCH, TAG_AD_BUCKET_FETCH_MORE)
+        .filter { it.returnTypeName == "void" && it.isConcreteHookTarget() }
 
 /**
  * The Reels video-ad fetch.
@@ -1461,11 +1552,8 @@ val storyViewerAdsFetchMethodsFingerprint = findMethodListDirect {
  * Distinct from the Reels chaining and profile-Reels queries: this is the one that tops
  * up the ad supply for the main Reels viewer.
  */
-val reelsVideoAdsFetchMethodsFingerprint = findMethodListDirect {
-    findMethod {
-        matcher { returnType = "void"; usingStrings("FBFetchReelsVideoAdsQuery") }
-    }.filter { it.isConcreteHookTarget() }.distinctBy { it.descriptor }
-}
+private fun BlockRequestScan.resolveReelsVideoAdsFetch(): List<MethodData> =
+    tagged(TAG_REELS_VIDEO_ADS_QUERY).filter { it.returnTypeName == "void" && it.isConcreteHookTarget() }
 
 /**
  * Insertion of a real-time-intent ad into the Video Home / Reels item stream.
@@ -1474,19 +1562,13 @@ val reelsVideoAdsFetchMethodsFingerprint = findMethodListDirect {
  * been fetched and places it in the list the viewer scrolls. Skipping it leaves the
  * stream as it was, with no slot to collapse.
  */
-val videoHomeAdInsertionMethodsFingerprint = findMethodListDirect {
-    findMethod {
-        matcher {
-            returnType = "void"
-            usingStrings("VideoHomeDataControllerAdsUtil.maybeInsertFbShortsRealtimeIntentItem")
-        }
-    }.filter { it.isConcreteHookTarget() }.distinctBy { it.descriptor }
-}
+private fun BlockRequestScan.resolveVideoHomeAdInsertion(): List<MethodData> =
+    tagged(TAG_VIDEO_HOME_RTI_INSERT).filter { it.returnTypeName == "void" && it.isConcreteHookTarget() }
 
 /**
  * The ad-channel *network* layer, one level below the async-ad controller.
  *
- * [feedAsyncAdRequestMethodsFingerprint] stops the controller deciding to make a
+ * [resolveFeedAsyncAdRequest] stops the controller deciding to make a
  * request. These are the methods that actually put one on the wire, and they are reached
  * by callers the controller does not own — which is how the news feed and Reels kept
  * receiving ads on a build where the controller hooks landed. Verified on the shipped
@@ -1505,27 +1587,17 @@ val videoHomeAdInsertionMethodsFingerprint = findMethodListDirect {
  *
  * All four are `void`, so [hookAdRequestNoOp] can simply skip them.
  */
-val adChannelNetworkRequestMethodsFingerprint = findMethodListDirect {
-    listOf(
-        // Verified on the shipped FB 575.0.0.45.73 dex:
-        //   FeedNetworkController.doAdChannelNetworkRequest        -> X.1iV->Aeo  void
-        //   VideoHomeCSRNetworkRequester.doAdChannelNetworkRequest -> X.57P->Aeo  void
-        //   MainFeedCSRDataLoaderImpl.maybeDoAsyncAdsTailLoad      -> X.1mW->A08  void
-        "FeedNetworkController.doAdChannelNetworkRequest",
-        "VideoHomeCSRNetworkRequester.doAdChannelNetworkRequest",
-        // AUDIT 2026-08: ghi chú "GONE on FB575" trước đây là SAI. Tag này CÓ trên dex đang
-        // chạy và resolve ra đúng một method void 4 tham số — tức phần top-up sponsored story
-        // giữa phiên vẫn đang được chặn bởi dòng này.
-        "AdsChannelNetworkHandlerHelper.doFetchAdditionalSponsoredStoriesFromNetwork",
-        "MainFeedCSRDataLoaderImpl.maybeDoAsyncAdsTailLoad",
-    ).let { tags ->
-        methodsUsingAnyOf(tags).filter { it.returnTypeName == "void" }
-    }.filter { it.isConcreteHookTarget() }.distinctBy { it.descriptor }
-}
+private fun BlockRequestScan.resolveAdChannelNetworkRequest(): List<MethodData> =
+    tagged(
+        TAG_FEED_NETWORK_AD_CHANNEL,
+        TAG_VIDEO_HOME_AD_CHANNEL,
+        TAG_EXTRA_SPONSORED_FETCH,
+        TAG_ASYNC_ADS_TAIL_LOAD,
+    ).filter { it.returnTypeName == "void" && it.isConcreteHookTarget() }
 
 /**
  * The Video Home / Reels ad pipeline, beyond the single real-time-intent insertion point
- * already covered by [videoHomeAdInsertionMethodsFingerprint].
+ * already covered by [resolveVideoHomeAdInsertion].
  *
  *  - `VideoHomeDataControllerImpl.maybeInsertAds` — the general insertion step. The RTI
  *    hook only covers one ad kind; this is the one every other Reels ad goes through.
@@ -1539,21 +1611,18 @@ val adChannelNetworkRequestMethodsFingerprint = findMethodListDirect {
  * `maybeRemoveAdsMidCardSurveyAndPreventFutureTriggers` is deliberately NOT here: it is
  * the method that takes the survey away again.
  */
-val videoHomeAdsPipelineMethodsFingerprint = findMethodListDirect {
-    methodsUsingAnyOf(
-        listOf(
-            "VideoHomeDataControllerImpl.maybeInsertAds",
-            "VideoHomeDataFetcher.fetchAds",
-            "VideoHomeDataControllerImpl.renderFbShortsRealtimeIntentAds",
-            "VideoHomeDataControllerImpl.maybeTriggerFbShortsAdsMidCardSurveyRequest",
-        )
-    ).filter { it.returnTypeName == "void" && it.isConcreteHookTarget() }.distinctBy { it.descriptor }
-}
+private fun BlockRequestScan.resolveVideoHomeAdsPipeline(): List<MethodData> =
+    tagged(
+        TAG_VIDEO_HOME_INSERT_ADS,
+        TAG_VIDEO_HOME_FETCH_ADS,
+        TAG_VIDEO_HOME_RTI_RENDER,
+        TAG_VIDEO_HOME_MIDCARD_SURVEY,
+    ).filter { it.returnTypeName == "void" && it.isConcreteHookTarget() }
 
 /**
  * The Stories viewer's *payload* ad fetch.
  *
- * [storyViewerAdsFetchMethodsFingerprint] covers `fetchAds` and `fetchMoreAds`. On this
+ * [resolveStoryViewerAdsFetch] covers `fetchAds` and `fetchMoreAds`. On this
  * build both resolve to one method and a second, separate method carries the payload
  * flavour — `fetchAdsWithPayload` and `buildAdsRequestPayload` share it — so the viewer
  * still had a route to top up its ad buckets with the other one blocked.
@@ -1567,14 +1636,8 @@ val videoHomeAdsPipelineMethodsFingerprint = findMethodListDirect {
  * dozens of unrelated tags — crash reporting, login, notifications, message expiry — so
  * skipping it would disable app startup work that has nothing to do with advertising.
  */
-val storyViewerAdsPayloadFetchMethodsFingerprint = findMethodListDirect {
-    methodsUsingAnyOf(
-        listOf(
-            "StoryViewerAdsPaginatingDataManager.fetchAdsWithPayload",
-            "AdPaginatingBucketStaticInsertionDataSource.buildAdsRequestPayload",
-        )
-    ).filter { it.returnTypeName == "void" && it.isConcreteHookTarget() }.distinctBy { it.descriptor }
-}
+private fun BlockRequestScan.resolveStoryViewerAdsPayloadFetch(): List<MethodData> =
+    tagged(TAG_STORY_VIEWER_FETCH_PAYLOAD, TAG_AD_BUCKET_BUILD_PAYLOAD).filter { it.returnTypeName == "void" && it.isConcreteHookTarget() }
 
 /**
  * The search "AI mode" ad *story* query.
@@ -1583,11 +1646,8 @@ val storyViewerAdsPayloadFetchMethodsFingerprint = findMethodListDirect {
  * that one asks which ads to show, this one fetches the story behind an ad already
  * chosen. Blocking only the first left the second able to hydrate ads from cache.
  */
-val searchAiModeAdStoryQueryFingerprint = findMethodListDirect {
-    findMethod {
-        matcher { returnType = "void"; usingStrings("SearchAIModeAdStoryQuery") }
-    }.filter { it.isConcreteHookTarget() }.distinctBy { it.descriptor }
-}
+private fun BlockRequestScan.resolveSearchAiModeAdStoryQuery(): List<MethodData> =
+    tagged(TAG_SEARCH_AI_AD_STORY).filter { it.returnTypeName == "void" && it.isConcreteHookTarget() }
 
 /**
  * The sponsored-story vendor: the two methods the feed calls to pick which advertisement
@@ -1655,15 +1715,10 @@ val quicksilverBannerAdLoaderMethodsFingerprint = findMethodListDirect {
  * does for a session that has spent its budget. No slot is created, so nothing has to be
  * filtered out of the feed afterwards.
  */
-val newsFeedPosOneAdEligibilityFingerprint = findMethodListDirect {
-    findMethod {
-        matcher {
-            returnType = "boolean"
-            paramCount = 0
-            usingStrings("NewsFeedPosOneAdStats.isPosOneAdEligibleInSession")
-        }
-    }.filter { it.isConcreteHookTarget() }.distinctBy { it.descriptor }
-}
+private fun BlockRequestScan.resolveNewsFeedPosOneAdEligibility(): List<MethodData> =
+    tagged(TAG_POS_ONE_ELIGIBLE).filter {
+        it.returnTypeName == "boolean" && it.paramTypeNames.isEmpty() && it.isConcreteHookTarget()
+    }
 
 // ─── Ad channel: lớp cơ sở dùng chung và subscriber ───────────────────────────
 //
@@ -1689,7 +1744,7 @@ val newsFeedPosOneAdEligibilityFingerprint = findMethodListDirect {
 //
 // Vì vậy hook đặt vào chính lớp cơ sở: nó phủ lớp con thứ hai và bất kỳ lớp con nào sau này
 // không ghi đè, trong khi FeedAsyncAdsController vẫn do
-// [feedAsyncAdRequestMethodsFingerprint] và [feedAsyncAdResultMethodsFingerprint] lo — bản
+// [resolveFeedAsyncAdRequest] và [resolveFeedAsyncAdResult] lo — bản
 // ghi đè của nó là một method khác hoàn toàn, hook lớp cơ sở không đụng tới.
 //
 // Tên method obfuscated không bị pin: nó được SUY RA từ chính FeedAsyncAdsController, vốn đã
@@ -1710,12 +1765,11 @@ private const val CSR_AD_CHANNEL_TAG = "CSRAdChannelControllerImpl"
 private fun MethodData.isHookableMethod(): Boolean =
     !isConstructor && !Modifier.isAbstract(modifiers)
 
-val csrAdChannelRequestMethodsFingerprint = findMethodListDirect {
-    val seed = methodsUsingAnyOf(listOf("FeedAsyncAdsController.maybeDoAdChannelRequest"))
-        .firstOrNull { it.returnTypeName == "void" }
-        ?: return@findMethodListDirect emptyList()
+private fun BlockRequestScan.resolveCsrAdChannelRequest(): List<MethodData> {
+    val seed = tagged(TAG_FEED_ASYNC_MAYBE_REQUEST).firstOrNull { it.returnTypeName == "void" }
+        ?: return emptyList()
 
-    classesUsingAnyOf(listOf(CSR_AD_CHANNEL_TAG)).flatMap { cls ->
+    return classesFor(CSR_AD_CHANNEL_TAG).flatMap { cls ->
         cls.findMethod {
             matcher {
                 name = seed.name
@@ -1726,16 +1780,15 @@ val csrAdChannelRequestMethodsFingerprint = findMethodListDirect {
     }.filter { it.isHookableMethod() }.distinctBy { it.descriptor }
 }
 
-val csrAdChannelResultMethodsFingerprint = findMethodListDirect {
-    val seed = methodsUsingAnyOf(listOf("FeedAsyncAdsController.onNext"))
-        .firstOrNull { it.returnTypeName == "com.google.common.collect.ImmutableList" }
-        ?: return@findMethodListDirect emptyList()
+private fun BlockRequestScan.resolveCsrAdChannelResult(): List<MethodData> {
+    val seed = tagged(TAG_FEED_ASYNC_ON_NEXT).firstOrNull { it.returnTypeName == IMMUTABLE_LIST }
+        ?: return emptyList()
 
-    classesUsingAnyOf(listOf(CSR_AD_CHANNEL_TAG)).flatMap { cls ->
+    return classesFor(CSR_AD_CHANNEL_TAG).flatMap { cls ->
         cls.findMethod {
             matcher {
                 name = seed.name
-                returnType = "com.google.common.collect.ImmutableList"
+                returnType = IMMUTABLE_LIST
                 paramCount = seed.paramTypeNames.size
             }
         }
@@ -1747,7 +1800,7 @@ val csrAdChannelResultMethodsFingerprint = findMethodListDirect {
  *
  * Đây là mảnh còn thiếu của lập luận "chặn request thôi chưa đủ" mà [BlockFacebookAdRequests]
  * đã viết ra: kênh ads được hâm nóng bởi một prefetch chạy trước khi module kịp cài hook, nên
- * một response đang bay vẫn ghép được vào feed. [feedAsyncAdResultMethodsFingerprint] chặn
+ * một response đang bay vẫn ghép được vào feed. [resolveFeedAsyncAdResult] chặn
  * chỗ controller biến response thành edge; cái này chặn sớm hơn một bước, ngay tại subscriber
  * nhận response.
  *
@@ -1756,20 +1809,14 @@ val csrAdChannelResultMethodsFingerprint = findMethodListDirect {
  * `onNext` không thể chạm tới nội dung tự nhiên. `onError` cố ý không đụng tới: nó là đường
  * app tự xử lý khi request hỏng, và để nguyên thì app kết thúc luồng đúng như mọi lần lỗi mạng.
  */
-val adsChannelSubscriberNextFingerprint = findMethodListDirect {
-    methodsUsingAnyOf(listOf("AdsChannelRequestSubscriber.onNext"))
-        .filter { it.returnTypeName == "void" && it.isConcreteHookTarget() }
-        .distinctBy { it.descriptor }
-}
+private fun BlockRequestScan.resolveAdsChannelSubscriberNext(): List<MethodData> =
+    tagged(TAG_ADS_SUBSCRIBER_ON_NEXT).filter { it.returnTypeName == "void" && it.isConcreteHookTarget() }
 
 /** Method biến response của subscriber thành danh sách edge — trả list rỗng. */
-val adsChannelSubscriberResultFingerprint = findMethodListDirect {
-    classesUsingAnyOf(listOf("AdsChannelRequestSubscriber.onNext")).flatMap { cls ->
-        cls.findMethod {
-            matcher { returnType = "com.google.common.collect.ImmutableList"; paramCount = 1 }
-        }
+private fun BlockRequestScan.resolveAdsChannelSubscriberResult(): List<MethodData> =
+    classesFor(TAG_ADS_SUBSCRIBER_ON_NEXT).flatMap { cls ->
+        cls.findMethod { matcher { returnType = IMMUTABLE_LIST; paramCount = 1 } }
     }.filter { it.isConcreteHookTarget() }.distinctBy { it.descriptor }
-}
 
 /**
  * Hai method `void` phụ trợ của tầng request, mỗi cái đã được kiểm tra từng literal một.
@@ -1787,15 +1834,8 @@ val adsChannelSubscriberResultFingerprint = findMethodListDirect {
  * luôn tham số của story tự nhiên. Đúng một chữ "And" trong tên tách hai method này ra làm
  * hai số phận ngược nhau, và chỉ có dex mới nói được điều đó.
  */
-val feedAdRequestParamMethodsFingerprint = findMethodListDirect {
-    methodsUsingAnyOf(
-        listOf(
-            "FetchNewsFeedMethod.addCachedAdDataParams",
-            "FeedSponsoredStoryHolder.rerankWhenAddingStory",
-        )
-    ).filter { it.returnTypeName == "void" && it.isConcreteHookTarget() }
-        .distinctBy { it.descriptor }
-}
+private fun BlockRequestScan.resolveFeedAdRequestParam(): List<MethodData> =
+    tagged(TAG_CACHED_AD_DATA_PARAMS, TAG_RERANK_WHEN_ADDING).filter { it.returnTypeName == "void" && it.isConcreteHookTarget() }
 
 // ─── Trình phát TOÀN MÀN HÌNH (short-form deep dive) ──────────────────────────
 //
@@ -1823,11 +1863,8 @@ val feedAdRequestParamMethodsFingerprint = findMethodListDirect {
 // là doAdChannelNetworkRequest vốn đã bị mục 6 chặn — trùng lặp vô hại vì hook helper tự khử
 // theo method.
 
-val deepDiveAsyncAdRequestMethodsFingerprint = findMethodListDirect {
-    findMethod {
-        matcher { usingStrings("async_ads_request_type", "fb_shorts_video_deep_dive") }
-    }.filter { it.isConcreteHookTarget() }.distinctBy { it.descriptor }
-}
+private fun BlockRequestScan.resolveDeepDiveAsyncAdRequest(): List<MethodData> =
+    tagged(GROUP_DEEP_DIVE_ASYNC).filter { it.isConcreteHookTarget() }
 
 /**
  * Bước CHÈN quảng cáo vào hàng đợi phát tiếp, nằm cùng class với bước fetch ở trên.
@@ -1841,12 +1878,97 @@ val deepDiveAsyncAdRequestMethodsFingerprint = findMethodListDirect {
  * Facebook sau này nhét thêm việc khác vào đây thì cách nhận ra là hàng đợi "TIẾP THEO" ngừng
  * nạp video mới; tắt [BlockFacebookAdRequests] là quay lại như cũ.
  */
-val deepDiveChainAdMethodsFingerprint = findMethodListDirect {
-    findMethod {
-        matcher { usingStrings("async_ads_request_type", "sfd_chaining") }
-    }.mapNotNull { it.declaredClass }
+private fun BlockRequestScan.resolveDeepDiveChainAd(): List<MethodData> =
+    tagged(GROUP_DEEP_DIVE_CHAIN)
+        .mapNotNull { it.declaredClass }
         .distinctBy { it.name }
         .flatMap { cls ->
             cls.findMethod { matcher { modifiers = Modifier.STATIC; returnType = "void" } }
         }.filter { it.isConcreteHookTarget() }.distinctBy { it.descriptor }
+
+// ─── Điểm vào duy nhất của [BlockFacebookAdRequests] ─────────────────────────
+//
+// MỘT fingerprint, nên MỘT cache key, cho toàn bộ tầng chặn request.
+//
+// Lý do là hiệu năng, và nó nằm ở `SharedPrefCache`: `putStringList(key, emptyList())` ghi
+// `emptyList().joinToString("|")` == "", còn `getStringList` lọc `takeIf(String::isNotBlank)`
+// rồi trả `default` = null. Trong `CacheBridgeStore.getCachedList`, null nghĩa là "KHÔNG CÓ
+// key trong cache" chứ không phải "cache rỗng" — nên nó gọi loader và quét lại DexKit.
+//
+// Hệ quả: mọi fingerprint trả về list rỗng đều bị quét lại MỖI LẦN mở app, vĩnh viễn. Và vì
+// `CacheBridgeRuntime` tạo bridge native theo kiểu lazy, chỉ cần MỘT lần quét như vậy là
+// `DexKitBridge.create(classLoader, true)` phải parse lại toàn bộ ~16 dex của Facebook —
+// trên main thread, trong `KatanaDexGate`, một lần cho mỗi attempt.
+//
+// Trước đây patch này mở 17 cache key riêng, tức 17 cơ hội dính một key rỗng. Gộp thành một
+// key thì chỉ cần MỘT nhóm resolve được là cả danh sách được lưu, và những lần mở sau không
+// còn chạm tới DexKit nữa.
+//
+// Cái giá: một lần resolve trên dex nạp dở sẽ được cache nguyên trạng (trước đây kết quả
+// rỗng vô tình không bao giờ được lưu). Vì vậy [BlockFacebookAdRequests] bắt buộc phải có
+// readiness gate như HideFacebookAds. Nếu vẫn lỡ cache thiếu, cache tự lành ở lần build
+// module kế tiếp: khoá cache mang theo `BuildConfig.COMMIT_HASH`.
+//
+// Kiểu trả về của từng method quyết định cách hook ở phía patch, đúng như từng mục vẫn làm.
+val blockAdRequestTargetsFingerprint = findMethodListDirect {
+    val scan = BlockRequestScan(
+        methodHits = batchMethodGroups(
+            mapOf(
+                TAG_FEED_ASYNC_DO_REQUEST to listOf(TAG_FEED_ASYNC_DO_REQUEST),
+                TAG_FEED_ASYNC_MAYBE_REQUEST to listOf(TAG_FEED_ASYNC_MAYBE_REQUEST),
+                TAG_FEED_ASYNC_ON_NEXT to listOf(TAG_FEED_ASYNC_ON_NEXT),
+                TAG_STORY_VIEWER_FETCH_MORE to listOf(TAG_STORY_VIEWER_FETCH_MORE),
+                TAG_AD_BUCKET_FETCH to listOf(TAG_AD_BUCKET_FETCH),
+                TAG_AD_BUCKET_FETCH_MORE to listOf(TAG_AD_BUCKET_FETCH_MORE),
+                TAG_REELS_VIDEO_ADS_QUERY to listOf(TAG_REELS_VIDEO_ADS_QUERY),
+                TAG_VIDEO_HOME_RTI_INSERT to listOf(TAG_VIDEO_HOME_RTI_INSERT),
+                TAG_POS_ONE_ELIGIBLE to listOf(TAG_POS_ONE_ELIGIBLE),
+                TAG_FEED_NETWORK_AD_CHANNEL to listOf(TAG_FEED_NETWORK_AD_CHANNEL),
+                TAG_VIDEO_HOME_AD_CHANNEL to listOf(TAG_VIDEO_HOME_AD_CHANNEL),
+                TAG_EXTRA_SPONSORED_FETCH to listOf(TAG_EXTRA_SPONSORED_FETCH),
+                TAG_ASYNC_ADS_TAIL_LOAD to listOf(TAG_ASYNC_ADS_TAIL_LOAD),
+                TAG_VIDEO_HOME_INSERT_ADS to listOf(TAG_VIDEO_HOME_INSERT_ADS),
+                TAG_VIDEO_HOME_FETCH_ADS to listOf(TAG_VIDEO_HOME_FETCH_ADS),
+                TAG_VIDEO_HOME_RTI_RENDER to listOf(TAG_VIDEO_HOME_RTI_RENDER),
+                TAG_VIDEO_HOME_MIDCARD_SURVEY to listOf(TAG_VIDEO_HOME_MIDCARD_SURVEY),
+                TAG_STORY_VIEWER_FETCH_PAYLOAD to listOf(TAG_STORY_VIEWER_FETCH_PAYLOAD),
+                TAG_AD_BUCKET_BUILD_PAYLOAD to listOf(TAG_AD_BUCKET_BUILD_PAYLOAD),
+                TAG_SEARCH_AI_AD_STORY to listOf(TAG_SEARCH_AI_AD_STORY),
+                TAG_ADS_SUBSCRIBER_ON_NEXT to listOf(TAG_ADS_SUBSCRIBER_ON_NEXT),
+                TAG_CACHED_AD_DATA_PARAMS to listOf(TAG_CACHED_AD_DATA_PARAMS),
+                TAG_RERANK_WHEN_ADDING to listOf(TAG_RERANK_WHEN_ADDING),
+                // Hai group AND: một chuỗi đứng riêng thì không đủ hẹp, đi cùng nhau mới đủ.
+                GROUP_DEEP_DIVE_ASYNC to listOf(TAG_ASYNC_ADS_REQUEST_TYPE, TAG_DEEP_DIVE_SURFACE),
+                GROUP_DEEP_DIVE_CHAIN to listOf(TAG_ASYNC_ADS_REQUEST_TYPE, TAG_SFD_CHAINING),
+            )
+        ),
+        classHits = batchClassGroups(
+            mapOf(
+                CSR_AD_CHANNEL_TAG to listOf(CSR_AD_CHANNEL_TAG),
+                TAG_ADS_SUBSCRIBER_ON_NEXT to listOf(TAG_ADS_SUBSCRIBER_ON_NEXT),
+            )
+        ),
+    )
+
+    listOf(
+        scan::resolveFeedAsyncAdRequest,          // 1  void
+        scan::resolveFeedAsyncAdResult,           // 2  ImmutableList
+        scan::resolveStoryViewerAdsFetch,         // 3  void
+        scan::resolveReelsVideoAdsFetch,          // 4  void
+        scan::resolveVideoHomeAdInsertion,        // 5  void
+        scan::resolveNewsFeedPosOneAdEligibility, // 6  boolean
+        scan::resolveAdChannelNetworkRequest,     // 7  void
+        scan::resolveVideoHomeAdsPipeline,        // 8  void
+        scan::resolveStoryViewerAdsPayloadFetch,  // 9  void
+        scan::resolveSearchAiModeAdStoryQuery,    // 10 void
+        scan::resolveCsrAdChannelRequest,         // 11 void
+        scan::resolveCsrAdChannelResult,          // 12 ImmutableList
+        scan::resolveAdsChannelSubscriberNext,    // 13 void
+        scan::resolveAdsChannelSubscriberResult,  // 14 ImmutableList
+        scan::resolveFeedAdRequestParam,          // 15 void
+        scan::resolveDeepDiveAsyncAdRequest,      // 16 void | Object
+        scan::resolveDeepDiveChainAd,             // 17 static void
+    ).flatMap { resolve ->
+        runCatching { resolve() }.getOrDefault(emptyList())
+    }.distinctBy { it.descriptor }
 }
