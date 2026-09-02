@@ -62,6 +62,38 @@ val BlockFacebookAdRequests = patch(
     description = "Stops the feed, Stories, Reels and Watch asking for ads in the first place, instead of removing them afterwards. Turn off if a feed or the Stories viewer stops loading.",
 ) {
 
+    // ── 0. Readiness gate ────────────────────────────────────────────────────
+    //
+    // MỚI, và bắt buộc phải có kể từ khi mọi mục dưới đây dùng CHUNG một cache key
+    // ([blockAdRequestTargetsFingerprint]).
+    //
+    // Trước đây mọi thứ trong patch này đều bọc `runCatching`, nên patch không bao giờ ném
+    // ra ngoài, không bao giờ vào `failedPatches`, và được đánh dấu applied ngay ở attempt
+    // đầu tiên — kể cả khi dex phụ của Facebook chưa nạp xong (`KatanaDexGate.isDexReady`
+    // chỉ dò đúng hai class). Nó chỉ không gây hại vì kết quả rỗng vô tình không bao giờ
+    // được ghi cache; giờ kết quả gộp lại được ghi, nên một lần resolve non nớt sẽ đóng
+    // băng luôn. Dùng đúng mỏ neo mà [HideFacebookAds] đã tin cậy trên mọi bản build: nếu
+    // nó chưa resolve được thì ném ra, `KatanaDexGate` sẽ chạy lại patch khi dex đã vào.
+    runCatching { ::sponsoredPoolAddMethodFingerprint.method }.getOrElse {
+        error("Facebook feed dex is not visible yet - deferring patch")
+    }
+
+    // ── 1. Cài hook, phân nhánh theo kiểu trả về ─────────────────────────────
+    //
+    // Một lượt duyệt trên danh sách gộp thay cho 17 khối riêng lẻ. Cách chọn hook không
+    // đổi so với trước — nó vốn đã bị kiểu trả về quyết định ở từng mục, chỉ là trước đây
+    // được viết tay từng chỗ:
+    //
+    //   void            -> bỏ qua thân method            (mục 1, 3-5, 7-11, 13, 15, 17)
+    //   boolean         -> trả false                     (mục 6, quảng cáo vị trí một)
+    //   collection      -> trả collection rỗng           (mục 2, 12, 14)
+    //   object khác     -> trả null                      (mục 16, lambda Kotlin invoke())
+    //
+    // Kiểu nguyên thuỷ ngoài boolean thì không đụng tới: không có giá trị nào an toàn để
+    // trả về, và đó cũng chính là điều ba helper phía dưới tự kiểm tra lần nữa trước khi
+    // hook. Bản thân các helper còn khử trùng lặp theo method, nên những mục chồng lấn
+    // nhau — `doAdChannelNetworkRequest` vừa thuộc mục 7 vừa thuộc mục 16 chẳng hạn — chỉ
+    // được hook một lần.
     ::blockAdRequestTargetsFingerprint.dexMethodList.forEach { dm ->
         runCatching {
             val method = dm.toMethod()
