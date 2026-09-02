@@ -1,6 +1,7 @@
 package io.github.nexalloy
 
 import io.github.nexalloy.hoodles.morphe.alltrails.AllTrailsPatches
+import io.github.nexalloy.hoodles.morphe.protonvpn.ProtonVpnPatches
 import io.github.nexalloy.morphe.google.GoogleDiscoverPatches
 import io.github.nexalloy.morphe.music.YTMusicPatches
 import io.github.nexalloy.morphe.reddit.RedditPatches
@@ -25,6 +26,7 @@ class AppPatchInfo(
 )
 
 val appPatchConfigurations = listOf(
+    AppPatchInfo("Proton VPN", "ch.protonvpn.android", ProtonVpnPatches),
     AppPatchInfo("Zalo", "com.zing.zalo", ZaloPatches),
     AppPatchInfo("YouTube", "com.google.android.youtube", YouTubePatches),
     AppPatchInfo("YT Music", "com.google.android.apps.youtube.music", YTMusicPatches),
