@@ -10,7 +10,7 @@ internal object CanonicalPostToStringFingerprint : Fingerprint(
 internal object CanonicalPostConstructorFingerprint : Fingerprint(
     classFingerprint = CanonicalPostToStringFingerprint,
     name = "<init>",
-    custom = { paramCount = 41 },
+    custom = { paramCount = 42 },
 )
 
 internal object AvailablePostToStringFingerprint : Fingerprint(
