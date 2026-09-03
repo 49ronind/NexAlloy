@@ -2,11 +2,6 @@ package io.github.nexalloy.rushiranpise.morphe.sdmaidse.premium
 
 import io.github.nexalloy.morphe.Fingerprint
 
-object UpgradeInfoClassFingerprint : Fingerprint(
-    definingClass = "Leu/darken/sdmse/common/upgrade/core/UpgradeRepoGplay\$Info;",
-    name = "isPro",
-    returnType = "Z",
-)
 
 object IsProSuspendFingerprint : Fingerprint(
     definingClass = "Leu/darken/sdmse/common/upgrade/UpgradeRepoExtensionsKt;",
