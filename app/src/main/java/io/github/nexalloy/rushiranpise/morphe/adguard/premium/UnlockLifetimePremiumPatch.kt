@@ -8,28 +8,24 @@ val UnlockLifetimePremium = patch(
 ) {
     var fakePaidLicense: Any? = null
 
-    fun getPaidLicense(classLoader: ClassLoader): Any? {
+    fun getPaidLicense(): Any? {
         if (fakePaidLicense != null) return fakePaidLicense
         return runCatching {
-            val paidLicenseMethod = PaidLicenseFingerprint.getMethod(classLoader) ?: return null
-            val paidLicenseClass = paidLicenseMethod.declaringClass
+            val constructor = PaidLicenseFingerprint.constructor
+            val paidLicenseClass = PaidLicenseFingerprint.declaredClass
 
             // Second constructor param is the LicenseType enum class
-            val licenseTypeClass = paidLicenseMethod.parameterTypes.getOrNull(1) ?: return null
+            val licenseTypeClass = constructor.parameterTypes.getOrNull(1) ?: return null
             val familyEnum = licenseTypeClass.enumConstants?.firstOrNull { (it as? Enum<*>)?.name == "Family" }
                 ?: licenseTypeClass.enumConstants?.firstOrNull { (it as? Enum<*>)?.name == "Personal" }
                 ?: licenseTypeClass.enumConstants?.firstOrNull()
 
             // LicenseDuration.Lifetime singleton
-            val lifetimeMethod = LifetimeDurationFingerprint.getMethod(classLoader)
-            val lifetimeClass = lifetimeMethod?.declaringClass
-            val lifetimeInstance = lifetimeClass?.declaredFields?.firstOrNull {
+            val lifetimeClass = LifetimeDurationFingerprint.declaredClass
+            val lifetimeInstance = lifetimeClass.declaredFields.firstOrNull {
                 java.lang.reflect.Modifier.isStatic(it.modifiers) && it.type == lifetimeClass
             }?.apply { isAccessible = true }?.get(null)
 
-            val constructor = paidLicenseClass.declaredConstructors.firstOrNull {
-                it.parameterTypes.size >= 6
-            } ?: paidLicenseClass.declaredConstructors.firstOrNull() ?: return null
             constructor.isAccessible = true
 
             // PaidLicense(licenseKey="", licenseType=Family, licenseDuration=Lifetime, devCount=1, maxDevCount=9, keyOwner="")
@@ -43,7 +39,7 @@ val UnlockLifetimePremium = patch(
     runCatching {
         GetPlusStateFingerprint.hookMethod {
             before { param ->
-                val license = getPaidLicense(param.thisObject.javaClass.classLoader)
+                val license = getPaidLicense()
                 if (license != null) {
                     param.result = license
                 }
@@ -55,7 +51,7 @@ val UnlockLifetimePremium = patch(
     runCatching {
         SetPlusStateFingerprint.hookMethod {
             before { param ->
-                val license = getPaidLicense(param.thisObject.javaClass.classLoader)
+                val license = getPaidLicense()
                 if (license != null) {
                     param.args[0] = license
                 }
@@ -67,7 +63,7 @@ val UnlockLifetimePremium = patch(
     runCatching {
         StateFlowResolverFingerprint.hookMethod {
             before { param ->
-                val license = getPaidLicense(param.thisObject.javaClass.classLoader)
+                val license = getPaidLicense()
                 if (license != null) {
                     param.result = license
                 }
@@ -79,7 +75,7 @@ val UnlockLifetimePremium = patch(
     runCatching {
         PromoStateFlowResolverFingerprint.hookMethod {
             before { param ->
-                val license = getPaidLicense(param.thisObject.javaClass.classLoader)
+                val license = getPaidLicense()
                 if (license != null) {
                     param.result = license
                 }
