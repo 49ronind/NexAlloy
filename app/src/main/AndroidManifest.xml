@@ -24,6 +24,7 @@
         <package android:name="com.community.oneroom" />
         <package android:name="com.storymatrix.drama" />
         <package android:name="com.adguard.android" />
+        <package android:name="eu.darken.sdmse" />
     </queries>
 
     <application
