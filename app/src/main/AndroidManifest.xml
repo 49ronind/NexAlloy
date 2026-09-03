@@ -21,6 +21,8 @@
         <package android:name="com.twitter.android" />
         <package android:name="com.zing.zalo" />
         <package android:name="ch.protonvpn.android" />
+        <package android:name="com.community.oneroom" />
+        <package android:name="com.storymatrix.drama" />
     </queries>
 
     <application
