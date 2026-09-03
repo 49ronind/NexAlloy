@@ -23,6 +23,7 @@
         <package android:name="ch.protonvpn.android" />
         <package android:name="com.community.oneroom" />
         <package android:name="com.storymatrix.drama" />
+        <package android:name="com.adguard.android" />
     </queries>
 
     <application
