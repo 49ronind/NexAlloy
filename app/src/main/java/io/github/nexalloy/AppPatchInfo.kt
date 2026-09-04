@@ -14,6 +14,7 @@ import io.github.nexalloy.okish.morphe.moviebox.MovieBoxPatches
 import io.github.nexalloy.rushiranpise.morphe.dramabox.DramaBoxPatches
 import io.github.nexalloy.rushiranpise.morphe.adguard.AdGuardPatches
 import io.github.nexalloy.rushiranpise.morphe.sdmaidse.SdMaidSePatches
+import io.github.nexalloy.rushiranpise.morphe.mangaplus.MangaPlusPatches
 import io.github.nexalloy.revanced.photomath.PhotomathPatches
 import io.github.nexalloy.revanced.strava.StravaPatches
 import io.github.nexalloy.revanced.zalo.ZaloPatches 
@@ -35,6 +36,7 @@ val appPatchConfigurations = listOf(
     AppPatchInfo("DramaBox", "com.storymatrix.drama", DramaBoxPatches),
     AppPatchInfo("AdGuard", "com.adguard.android", AdGuardPatches),
     AppPatchInfo("SD Maid SE", "eu.darken.sdmse", SdMaidSePatches),
+    AppPatchInfo("MANGA Plus", "jp.co.shueisha.mangaplus", MangaPlusPatches),
     AppPatchInfo("Zalo", "com.zing.zalo", ZaloPatches),
     AppPatchInfo("YouTube", "com.google.android.youtube", YouTubePatches),
     AppPatchInfo("YT Music", "com.google.android.apps.youtube.music", YTMusicPatches),
