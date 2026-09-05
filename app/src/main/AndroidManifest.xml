@@ -26,6 +26,7 @@
         <package android:name="com.adguard.android" />
         <package android:name="eu.darken.sdmse" />
         <package android:name="jp.co.shueisha.mangaplus" />
+        <package android:name="com.spotify.music" />
     </queries>
 
     <application

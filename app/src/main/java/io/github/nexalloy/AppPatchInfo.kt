@@ -17,7 +17,8 @@ import io.github.nexalloy.rushiranpise.morphe.sdmaidse.SdMaidSePatches
 import io.github.nexalloy.rushiranpise.morphe.mangaplus.MangaPlusPatches
 import io.github.nexalloy.revanced.photomath.PhotomathPatches
 import io.github.nexalloy.revanced.strava.StravaPatches
-import io.github.nexalloy.revanced.zalo.ZaloPatches 
+import io.github.nexalloy.revanced.zalo.ZaloPatches
+import io.github.nexalloy.revanced.spotify.SpotifyPatches
 import io.github.nexalloy.morphe.twitter.TwitterPatches
 import io.github.nexalloy.morphe.twitter.utils.Constants.PACKAGE_NAME as TWITTER_PACKAGE_NAME
 
@@ -37,6 +38,7 @@ val appPatchConfigurations = listOf(
     AppPatchInfo("AdGuard", "com.adguard.android", AdGuardPatches),
     AppPatchInfo("SD Maid SE", "eu.darken.sdmse", SdMaidSePatches),
     AppPatchInfo("MANGA Plus", "jp.co.shueisha.mangaplus", MangaPlusPatches),
+    AppPatchInfo("Spotify", "com.spotify.music", SpotifyPatches),
     AppPatchInfo("Zalo", "com.zing.zalo", ZaloPatches),
     AppPatchInfo("YouTube", "com.google.android.youtube", YouTubePatches),
     AppPatchInfo("YT Music", "com.google.android.apps.youtube.music", YTMusicPatches),
