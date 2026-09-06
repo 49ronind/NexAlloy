@@ -169,7 +169,7 @@ class PatchExecutor(
 
     init {
         System.loadLibrary("dexkit")
-        DexKitCacheBridge.init(cache)
+        runCatching { DexKitCacheBridge.init(cache) }
     }
 
     private fun openDexKit() = when (dexSource) {
