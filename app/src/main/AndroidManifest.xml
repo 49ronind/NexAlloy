@@ -22,6 +22,11 @@
         <package android:name="com.zing.zalo" />
         <package android:name="ch.protonvpn.android" />
         <package android:name="com.soundcloud.android" />
+        <package android:name="com.community.oneroom" />
+        <package android:name="com.storymatrix.drama" />
+        <package android:name="com.adguard.android" />
+        <package android:name="eu.darken.sdmse" />
+        <package android:name="jp.co.shueisha.mangaplus" />
     </queries>
 
     <application
