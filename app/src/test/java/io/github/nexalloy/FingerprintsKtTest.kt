@@ -215,11 +215,31 @@ class FingerprintsKtTest(val apkPath: Path) {
             apkPath.name.startsWith("com.google.android.youtube") -> "youtube"
             apkPath.name.startsWith("com.google.android.apps.youtube.music") -> "music"
             apkPath.name.startsWith("com.reddit.frontpage") -> "reddit"
-            else -> return@sequence
+            else -> {
+                // Dynamically resolve ported non-upstream apps (Proton VPN, MovieBox, DramaBox, Showly, etc.)
+                val matchingApp = appPatchConfigurations.firstOrNull { config ->
+                    apkPath.name.contains(config.packageName) ||
+                    apkPath.name.lowercase().contains(config.name.lowercase().filter { it.isLetterOrDigit() })
+                }
+                matchingApp?.name?.lowercase()?.filter { it.isLetterOrDigit() } ?: return@sequence
+            }
+        }
+
+        val rootSearchPath = when (app) {
+            "youtube" -> Path("src/main/java/io/github/nexalloy/morphe/youtube")
+            "music" -> Path("src/main/java/io/github/nexalloy/morphe/music")
+            "reddit" -> Path("src/main/java/io/github/nexalloy/morphe/reddit")
+            else -> {
+                // Dynamically locate ported package directory under io/github/nexalloy/**/morphe/$app
+                Files.walk(Path("src/main/java/io/github/nexalloy"))
+                    .filter { Files.isDirectory(it) && it.endsWith("morphe/$app") }
+                    .findFirst()
+                    .orElse(null) ?: return@sequence
+            }
         }
 
         val packageNames =
-            Files.walk(Path("src/main/java/io/github/nexalloy/morphe/$app"))
+            Files.walk(rootSearchPath)
                 .filter { Files.isRegularFile(it) && it.fileName.toString() == "Fingerprints.kt" }
                 .map {
                     // drop src/main/java, drop filename → package name
@@ -227,9 +247,11 @@ class FingerprintsKtTest(val apkPath: Path) {
                         .joinToString(".")
                 }.toList().toMutableList()
 
-        // Add shared fingerprints packages.
-        SharedFingerprintsProvider.getSharedFingerprints(app).forEach {
-            packageNames.add(it.substringBeforeLast('.'))
+        // Add shared fingerprints packages for upstream apps.
+        if (app in setOf("youtube", "music", "reddit")) {
+            SharedFingerprintsProvider.getSharedFingerprints(app).forEach {
+                packageNames.add(it.substringBeforeLast('.'))
+            }
         }
 
         packageNames.distinct().forEach { packageName ->

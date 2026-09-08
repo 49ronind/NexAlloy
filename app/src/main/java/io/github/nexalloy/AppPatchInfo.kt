@@ -9,7 +9,14 @@ import io.github.nexalloy.revanced.meta.MetaPatches
 import io.github.nexalloy.revanced.photomath.PhotomathPatches
 import io.github.nexalloy.revanced.strava.StravaPatches
 
-class AppPatchInfo(val appName: String, val packageName: String, val patches: Array<Patch>)
+enum class DexSource { APK_PATH, CLASS_LOADER }
+
+class AppPatchInfo(
+    val appName: String,
+    val packageName: String,
+    val patches: Array<Patch>,
+    val dexSource: DexSource = DexSource.APK_PATH,
+)
 
 val appPatchConfigurations = listOf(
     AppPatchInfo("YouTube", "com.google.android.youtube", YouTubePatches),
@@ -24,3 +31,4 @@ val appPatchConfigurations = listOf(
 )
 
 val patchesByPackage = appPatchConfigurations.associate { it.packageName to it.patches }
+val dexSourceByPackage = appPatchConfigurations.associate { it.packageName to it.dexSource }
