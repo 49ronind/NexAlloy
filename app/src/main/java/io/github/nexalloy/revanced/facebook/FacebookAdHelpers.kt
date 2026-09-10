@@ -956,26 +956,6 @@ fun hookPluginDescriptorGate(method: Method) {
  * descriptors, so organic plugins in the same list survive untouched.
  */
 /**
- * Suppresses a Litho component or section whose only purpose is drawing an ad, by
- * short-circuiting its render to null — Litho treats a null layout as "draw nothing".
- *
- * Deduplicated, because several tags legitimately resolve to the same render method.
- */
-fun hookAdComponentRender(method: Method) {
-    if (!pluginHooksInstalled.add(methodHookKey(method))) return
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) { param.result = null }
-    })
-}
-
-/**
- * Suppresses an ad-fetching query.
- *
- * The result is replaced with null rather than an empty object because the callers of
- * these fetch entry points treat a null as "nothing came back", which is the outcome we
- * want. If a surface ever hangs waiting on one of these, this is the hook to disable.
- */
-/**
  * Skips rendering a profile timeline story that carries an advertisement's tracking id.
  *
  * Only the render is short-circuited, and only for that one story: the component this
@@ -1010,13 +990,6 @@ fun hookTimelineStoryRender(method: Method, inspector: FeedItemInspector) {
     })
 }
 
-fun hookAdQueryFetch(method: Method) {
-    if (!pluginHooksInstalled.add(methodHookKey(method))) return
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) { param.result = null }
-    })
-}
-
 // ─── Hook installers – ad REQUEST layer ───────────────────────────────────────
 //
 // Everything below stops an advertisement from being asked for, as opposed to removing
@@ -1024,7 +997,7 @@ fun hookAdQueryFetch(method: Method) {
 // a slot that was never filled leaves no gap to collapse, no placeholder to blank and
 // no impression to report, and it saves the bandwidth the creative would have cost.
 //
-// All three installers refuse to touch a method whose return type they cannot satisfy,
+// Each installer refuses to touch a method whose return type it cannot satisfy,
 // because the failure mode of guessing wrong here is a ClassCastException inside
 // Facebook's own code rather than a missed ad.
 
@@ -1034,7 +1007,7 @@ fun hookAdQueryFetch(method: Method) {
  * Restricted to `void` on purpose. Xposed reports "skip the body" by setting a result,
  * and for any other return type that result has to be a value the caller can use — a
  * null returned to code expecting a list or a primitive crashes the surface instead of
- * silencing it. Callers that need a value use [hookEmptyCollectionResult] instead.
+ * silencing it. Callers that need a value use [hookNullAdResult] instead.
  */
 fun hookAdRequestNoOp(method: Method) {
     if (method.returnType != Void.TYPE) return
@@ -1045,26 +1018,10 @@ fun hookAdRequestNoOp(method: Method) {
 }
 
 /**
- * Returns an empty collection from a method that hands back a batch of ads.
- *
- * Used where the caller stores or iterates the result rather than checking it for null:
- * "no ads came back" is a state those callers already handle on every empty response,
- * whereas null is not.
- */
-fun hookEmptyCollectionResult(method: Method) {
-    val empty = buildEmptyListReturn(method.returnType) ?: return
-    if (!pluginHooksInstalled.add(methodHookKey(method))) return
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) { param.result = empty }
-    })
-}
-
-/**
  * Answers "there is no advertisement to serve" from a method whose whole job is to hand
  * one back.
  *
- * Distinct from [hookAdRequestNoOp], which only handles `void`, and from
- * [hookEmptyCollectionResult], which needs a collection to hand back: these methods
+ * Distinct from [hookAdRequestNoOp], which only handles `void`: these methods
  * return a single feed-unit edge and already have a documented no-ad path — the vendor
  * logs `empty_pool` and the caller moves on to the next organic story. Null is the value
  * that path produces, so it is the value returned here.
@@ -2848,6 +2805,152 @@ fun hookFeedCollectionAddEdge(method: Method, inspector: FeedItemInspector) {
             val edge = param.args.getOrNull(edgeIndex) ?: return
             if (!inspector.isExplicitlySponsoredFeedEdge(edge)) return
             param.result = false
+        }
+    })
+}
+
+// ─── Search results (SERP) ads ────────────────────────────────────────────────
+
+/**
+ * Search-result unit types that ARE an advertisement.
+ *
+ * These are constant names on Facebook's own search-result unit type enum, read straight
+ * off the shipped dex — the enum carries roughly 570 constants and these are the ones the
+ * app itself groups as ads. Membership is a positive identification: a unit of one of
+ * these types is an ad, and a unit of any other type is not touched, so the failure mode
+ * is a missed advertisement rather than a blanked results page.
+ *
+ * The app keeps a narrower set of its own (the four that its internal `isAd` predicate
+ * tests). This one is a superset: Marketplace's two ad kinds, the shoppable variant, the
+ * ads discovery header and its "see more" footer are ads by name and by behaviour, but
+ * sit outside the app's own set because it uses that set for ad *ranking* rather than for
+ * classification.
+ */
+val SEARCH_AD_UNIT_TYPE_NAMES = setOf(
+    "SEARCH_ADS",
+    "TOP_POSITION_SEARCH_ADS",
+    "TOP_POSITION_SHOPPABLE_ADS",
+    "DEPENDENT_SEARCH_ADS",
+    "LATE_DEPENDENT_SEARCH_ADS",
+    "MARKETPLACE_SEARCH_ADS",
+    "MARKETPLACE_BOOSTED_LISTING_SEARCH_ADS",
+    "SEARCH_ADS_DISCOVERY_HEADER",
+    "SEARCH_ADS_FLOATING_SEE_MORE",
+    "FACEBOOK_ADVERTISING",
+)
+
+private val searchAdMethodsHooked = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+
+/**
+ * Reads a search-result unit's declared type.
+ *
+ * There is no name guessing and no tree walking here, in deliberate contrast to
+ * [FeedItemInspector]: the unit type enum class is resolved by fingerprint, so the field
+ * holding it is simply "the one instance field whose type is that class". One field read
+ * and one set lookup per unit, which matters because this runs for every result on the
+ * page, on every page of results.
+ */
+class SearchResultUnitInspector(private val unitTypeEnumClass: Class<*>) {
+    /**
+     * Cached as a list rather than as a nullable Field so that a MISS is cached too — a
+     * unit class with no type field would otherwise re-walk its whole hierarchy on every
+     * result, forever. An empty list is the miss; a singleton list is the hit. The
+     * alternative, a sentinel Field looked up by its own name, would not survive this
+     * module's own minification.
+     */
+    private val typeFieldCache = ConcurrentHashMap<Class<*>, List<Field>>()
+
+    fun unitTypeName(unit: Any?): String? {
+        if (unit == null) return null
+        val field = typeFieldFor(unit.javaClass) ?: return null
+        return runCatching { field.get(unit)?.toString() }.getOrNull()
+    }
+
+    fun isAdUnit(unit: Any?): Boolean = unitTypeName(unit) in SEARCH_AD_UNIT_TYPE_NAMES
+
+    private fun typeFieldFor(type: Class<*>): Field? =
+        typeFieldCache.getOrPut(type) { listOfNotNull(resolveTypeField(type)) }.firstOrNull()
+
+    private fun resolveTypeField(type: Class<*>): Field? {
+        var current: Class<*>? = type
+        while (current != null && current != Any::class.java) {
+            current.declaredFields.firstOrNull { field ->
+                !Modifier.isStatic(field.modifiers) && field.type == unitTypeEnumClass
+            }?.let { return it.apply { isAccessible = true } }
+            current = current.superclass
+        }
+        return null
+    }
+}
+
+/**
+ * Drops advertisement units from the search results list.
+ *
+ * Filtered on the way OUT rather than on the way in: the input is raw GraphQL edges that
+ * have not been classified yet, while the returned list holds finished units that each
+ * state their own type. Dropping them here means the page never learns the ad existed —
+ * no slot is reserved, no placeholder is drawn and no impression is reported, which is the
+ * same outcome as a query that simply had no ad to return.
+ *
+ * The list is rebuilt with the same ImmutableList type it arrived as; if that rebuild
+ * fails the original result is left untouched rather than replaced with something the
+ * caller cannot use.
+ */
+fun hookSearchResultUnitList(method: Method, inspector: SearchResultUnitInspector) {
+    if (!searchAdMethodsHooked.add(methodHookKey(method))) return
+    XposedBridge.hookMethod(method, object : XC_MethodHook() {
+        override fun afterHookedMethod(param: MethodHookParam) {
+            val units = param.result as? Iterable<*> ?: return
+            val kept = ArrayList<Any?>()
+            var removed = 0
+            for (unit in units) {
+                if (runCatching { inspector.isAdUnit(unit) }.getOrDefault(false)) removed++ else kept.add(unit)
+            }
+            if (removed == 0) return
+            buildImmutableListLike(param.result, kept)?.let { param.result = it }
+        }
+    })
+}
+
+/**
+ * Empties the payload of the "ads have arrived" state.
+ *
+ * The top-position advertisement is fetched by its own query, separately from the results
+ * connection, so it never reaches [hookSearchResultUnitList]. Its response lands here, in
+ * the one state object that carries a list, and the renderer reads that list to decide
+ * what to draw. Replacing it with an empty list puts the page on the path it already takes
+ * whenever the server has no ad to sell — the module's standing preference over blanking a
+ * component that has already been given something to draw.
+ *
+ * The constructor still runs; only its list argument changes, so the state machine sees a
+ * perfectly ordinary "loaded, nothing in it" transition and every field it depends on is
+ * still set.
+ */
+fun hookSearchAdsLoadedState(constructor: java.lang.reflect.Member) {
+    if (!searchAdMethodsHooked.add("${constructor.declaringClass.name}#<init>")) return
+    XposedBridge.hookMethod(constructor, object : XC_MethodHook() {
+        override fun beforeHookedMethod(param: MethodHookParam) {
+            val current = param.args.getOrNull(0) as? Iterable<*> ?: return
+            if (!current.iterator().hasNext()) return
+            buildImmutableListLike(current, emptyList())?.let { param.args[0] = it }
+        }
+    })
+}
+
+/**
+ * Suppresses the render of a component that only ever draws a search advertisement.
+ *
+ * Safe to apply wholesale, unlike [hookTimelineStoryRender]: each component reached by
+ * this hook is registered under its own advertisement name and draws nothing else, so
+ * there is no organic content to lose. This is the backstop layer — if a build moves the
+ * ad onto a data path the two hooks above do not cover, the creative still has nowhere
+ * to be drawn.
+ */
+fun hookSearchAdComponentRender(method: Method) {
+    if (!searchAdMethodsHooked.add(methodHookKey(method))) return
+    XposedBridge.hookMethod(method, object : XC_MethodHook() {
+        override fun beforeHookedMethod(param: MethodHookParam) {
+            param.result = null
         }
     })
 }
