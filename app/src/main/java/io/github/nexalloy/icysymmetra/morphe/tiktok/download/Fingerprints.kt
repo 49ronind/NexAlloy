@@ -36,3 +36,11 @@ object AclCommonShareGetTranscodeFingerprint : Fingerprint(
         classMatcher { className("ACLCommonShare", StringMatchType.EndsWith) }
     }
 }
+
+object AwemeGetVideoFingerprint : Fingerprint(
+    definingClass = "Lcom/ss/android/ugc/aweme/feed/model/Aweme;",
+    name = "getVideo",
+    accessFlags = listOf(AccessFlags.PUBLIC),
+    returnType = "Lcom/ss/android/ugc/aweme/feed/model/Video;",
+    parameters = emptyList(),
+)
