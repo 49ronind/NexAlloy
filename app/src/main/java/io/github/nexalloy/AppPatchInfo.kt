@@ -24,6 +24,7 @@ import io.github.nexalloy.morphe.twitter.TwitterPatches
 import io.github.nexalloy.morphe.twitter.utils.Constants.PACKAGE_NAME as TWITTER_PACKAGE_NAME
 import io.github.nexalloy.v4n1x.morphe.soundcloud.shared.Constants.PACKAGE_NAME as SOUNDCLOUD_PACKAGE_NAME
 import io.github.nexalloy.epxec.morphe.haloreelspro.HaloReelsProPatches
+import io.github.nexalloy.epxec.morphe.freereels.FreeReelsPatches
 
 enum class DexSource { APK_PATH, CLASS_LOADER }
 
@@ -57,6 +58,7 @@ val appPatchConfigurations = listOf(
     AppPatchInfo("Google (Discover)", "com.google.android.googlequicksearchbox", GoogleDiscoverPatches),
     AppPatchInfo("Twitter/X", TWITTER_PACKAGE_NAME, TwitterPatches),
     AppPatchInfo("Halo Reels Pro", "com.halo.reels.movie.fast.pro", HaloReelsProPatches),
+    AppPatchInfo("FreeReels", "com.freereels.app", FreeReelsPatches),
 )
 
 val patchesByPackage = appPatchConfigurations.associate { it.packageName to it.patches }

@@ -29,6 +29,7 @@
         <package android:name="jp.co.shueisha.mangaplus" />
         <package android:name="com.zhiliaoapp.musically" />
         <package android:name="com.halo.reels.movie.fast.pro" />
+        <package android:name="com.freereels.app" />
     </queries>
 
     <application
