@@ -28,6 +28,7 @@
         <package android:name="eu.darken.sdmse" />
         <package android:name="jp.co.shueisha.mangaplus" />
         <package android:name="com.zhiliaoapp.musically" />
+        <package android:name="com.halo.reels.movie.fast.pro" />
     </queries>
 
     <application
