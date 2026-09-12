@@ -4,6 +4,7 @@ import app.morphe.extension.shared.Logger
 import io.github.nexalloy.patch
 import org.luckypray.dexkit.wrap.DexField
 import java.lang.reflect.Field
+import java.util.Collections
 
 val SaveDeletedMessages = patch(
     name = "Save deleted messages",
@@ -20,7 +21,7 @@ val SaveDeletedMessages = patch(
         hideInThread = ::messageHideInThreadField.dexField,
     )
     val kept = KeptMessages()
-    
+
     val findThread = runCatching { ::threadStateLookupMethod.method.apply { isAccessible = true } }
         .onFailure { Logger.printException({ "SaveDeletedMessages: thread lookup unresolved" }, it) }
         .getOrNull()
@@ -143,13 +144,12 @@ private class MessageAccess(
 }
 
 private class KeptMessages {
-    private val ids: MutableMap<String, Boolean> =
-        java.util.Collections.synchronizedMap(
-            object : LinkedHashMap<String, Boolean>(16, 0.75f, true) {
-                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Boolean>) =
-                    size > 2000
-            }
-        )
+    private val ids: MutableMap<String, Boolean> = Collections.synchronizedMap(
+        object : LinkedHashMap<String, Boolean>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Boolean>) =
+                size > 2000
+        }
+    )
 
     fun protect(vararg candidates: String?) {
         candidates.forEach { id -> if (!id.isNullOrEmpty()) ids.put(id, true) }

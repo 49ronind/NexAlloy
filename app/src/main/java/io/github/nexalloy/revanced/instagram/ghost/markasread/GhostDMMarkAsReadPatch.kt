@@ -10,10 +10,11 @@ import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.Toast
 import app.morphe.extension.shared.Logger
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedHelpers
+import de.robv.android.xposed.XposedBridge
+import io.github.nexalloy.hookMethod
 import io.github.nexalloy.patch
 import io.github.nexalloy.revanced.instagram.ghost.seenStateFingerprint
+import java.lang.reflect.Method
 
 private const val MARK_AS_READ_BTN_TAG = "ie_mark_as_read_btn"
 
@@ -41,7 +42,7 @@ private const val MARK_AS_READ_BTN_TAG = "ie_mark_as_read_btn"
  */
 private object SeenCallCapture {
     @Volatile
-    var method: java.lang.reflect.Method? = null
+    var method: Method? = null
 
     @Volatile
     private var lastArgs: Array<Any?>? = null
@@ -55,7 +56,6 @@ private object SeenCallCapture {
 
 /**
  * DM Mark As Read
- *
  *
  * Hooks [View.onAttachedToWindow] and, when the attached view is
  * `row_thread_composer_buttons_container`, injects a 👁 [ImageButton] into
@@ -79,49 +79,35 @@ val GhostDMMarkAsRead = patch(
     // argument list every time Instagram invokes it naturally. Uses `after`
     // so this never interferes with (or depends on) Ghost Mode's `before`
     // block that may block the call.
-    try {
+    runCatching {
         SeenCallCapture.method = ::seenStateFingerprint.method
 
         ::seenStateFingerprint.hookMethod {
+            after { param -> SeenCallCapture.capture(param.args) }
+        }
+    }.onFailure { Logger.printException({ "DMMarkAsRead seen-state capture hook failed" }, it) }
+
+    // View is a framework class, so there is nothing to fingerprint: hook it directly.
+    runCatching {
+        View::class.java.getDeclaredMethod("onAttachedToWindow").hookMethod {
             after { param ->
-                SeenCallCapture.capture(param.args)
+                val view = param.thisObject as? View ?: return@after
+
+                if (sCachedComposerContainerId == 0) {
+                    @SuppressLint("DiscouragedApi")
+                    val id = view.context.resources.getIdentifier(
+                        "row_thread_composer_buttons_container", "id", view.context.packageName
+                    )
+                    sCachedComposerContainerId = id
+                }
+
+                if (sCachedComposerContainerId == 0 || view.id != sCachedComposerContainerId) return@after
+
+                val parent = view.parent as? ViewGroup ?: return@after
+                injectMarkAsReadButton(parent)
             }
         }
-    } catch (t: Throwable) {
-        Logger.printException({ "DMMarkAsRead seen-state capture hook failed" }, t)
-    }
-
-    try {
-        XposedHelpers.findAndHookMethod(
-            View::class.java,
-            "onAttachedToWindow",
-            object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    val view = param.thisObject as? View ?: return
-
-                    // Resolve composer container ID once.
-                    if (sCachedComposerContainerId == 0) {
-                        @SuppressLint("DiscouragedApi")
-                        val id = view.context.resources.getIdentifier(
-                            "row_thread_composer_buttons_container",
-                            "id",
-                            view.context.packageName
-                        )
-                        sCachedComposerContainerId = id
-                    }
-
-                    if (sCachedComposerContainerId == 0 ||
-                        view.id != sCachedComposerContainerId
-                    ) return
-
-                    val parent = view.parent as? ViewGroup ?: return
-                    injectMarkAsReadButton(parent)
-                }
-            }
-        )
-    } catch (t: Throwable) {
-        Logger.printException({ "DMMarkAsRead hook failed" }, t)
-    }
+    }.onFailure { Logger.printException({ "DMMarkAsRead hook failed" }, it) }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -181,8 +167,9 @@ private fun triggerRealMarkAsSeen(ctx: Context) {
             return
         }
 
-        method.isAccessible = true
-        method.invoke(null, *args)
+        // The original method, not a reflective call: GhostSeenState hooks this very method
+        // and would swallow a normal invoke.
+        XposedBridge.invokeOriginalMethod(method, null, args)
 
         Toast.makeText(ctx, "Marked as read", Toast.LENGTH_SHORT).show()
     } catch (e: Exception) {

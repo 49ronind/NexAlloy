@@ -42,12 +42,10 @@ internal fun makeEphemeralPermanent(obj: Any) {
         var expireAt: Long? = null
 
         for (f in fields) {
-            if (f.type != Long::class.javaPrimitiveType &&
-                f.type != java.lang.Long::class.java
-            ) continue
+            if (f.type != Long::class.javaPrimitiveType && f.type != Long::class.javaObjectType) continue
             f.isAccessible = true
             val v = if (f.type == Long::class.javaPrimitiveType) f.getLong(obj)
-                    else (f.get(obj) as? Long) ?: continue
+                else (f.get(obj) as? Long) ?: continue
             if (v in (nowSec + 1) until year2100Sec) {
                 expireAt = v
                 break

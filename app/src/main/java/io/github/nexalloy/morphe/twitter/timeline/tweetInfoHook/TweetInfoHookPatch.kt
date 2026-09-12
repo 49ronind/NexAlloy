@@ -15,7 +15,6 @@ private const val CP_IS_POSSIBLY_SENSITIVE = 31
 private const val AP_PREMIUM_UPSELL_ARGS = 38
 
 val TweetInfoHook = patch(name = "<TweetInfoHook>") {
-
     CanonicalPostConstructorFingerprint.hookMethod {
         before { param ->
             if (logPostModelHooks) {

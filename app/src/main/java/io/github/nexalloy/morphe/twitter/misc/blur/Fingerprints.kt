@@ -1,5 +1,6 @@
 package io.github.nexalloy.morphe.twitter.misc.blur
 
+import io.github.nexalloy.morphe.AccessFlags
 import io.github.nexalloy.morphe.Opcode
 import io.github.nexalloy.morphe.findMethodDirect
 import io.github.nexalloy.morphe.opcodeEnum
@@ -8,7 +9,6 @@ import org.luckypray.dexkit.query.enums.StringMatchType
 import org.luckypray.dexkit.result.ClassData
 import org.luckypray.dexkit.result.InstructionData
 import org.luckypray.dexkit.result.MethodData
-import java.lang.reflect.Modifier
 
 private const val HAZE_PACKAGE = "dev.chrisbanes.haze"
 private const val HAZE_UPDATE_EFFECT_MARKER = "HazeEffectNode-updateEffect"
@@ -57,12 +57,13 @@ private fun InstructionData.booleanFieldAccess(
     return field.descriptor
 }
 
+private fun MethodData.hasFlag(flag: AccessFlags) = (modifiers and flag.modifier) != 0
+
 private fun isHazeBlurEnabledSetter(method: MethodData, owner: String): Boolean {
-    val modifiers = method.modifiers
     if (
-        Modifier.isStatic(modifiers) ||
-        !Modifier.isPublic(modifiers) ||
-        !Modifier.isFinal(modifiers) ||
+        method.hasFlag(AccessFlags.STATIC) ||
+        !method.hasFlag(AccessFlags.PUBLIC) ||
+        !method.hasFlag(AccessFlags.FINAL) ||
         method.returnTypeName != VOID_TYPE ||
         method.paramTypeNames != BOOLEAN_PARAMETERS
     ) {

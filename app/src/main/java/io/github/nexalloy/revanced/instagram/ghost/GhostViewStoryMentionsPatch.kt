@@ -9,11 +9,10 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageButton
 import android.widget.LinearLayout
+import android.graphics.Color
 import app.morphe.extension.shared.Logger
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedHelpers
+import io.github.nexalloy.hookMethod
 import io.github.nexalloy.patch
-import java.lang.reflect.Field
 
 private const val MENTIONS_BTN_TAG = "ie_story_mentions_btn"
 
@@ -25,39 +24,30 @@ val GhostViewStoryMentions = patch(
     description = "Adds a button in story options to view (and open) all tagged users " +
             "— including mentions hidden from the story viewer.",
 ) {
-    try {
-        XposedHelpers.findAndHookMethod(
-            View::class.java,
-            "onAttachedToWindow",
-            object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    val view = param.thisObject as? View ?: return
-                    val ctx = view.context ?: return
+    // View is a framework class, so there is nothing to fingerprint: hook it directly.
+    runCatching {
+        View::class.java.getDeclaredMethod("onAttachedToWindow").hookMethod {
+            after { param ->
+                val view = param.thisObject as? View ?: return@after
+                val ctx = view.context ?: return@after
 
-                    // We look for the story viewer root to attach our button.
-                    // Instagram's story option panel uses "reel_viewer_options"
-                    // or similar as the container id.
-                    if (sCachedStoryOptionsId == 0) {
-                        @SuppressLint("DiscouragedApi")
-                        val id = ctx.resources.getIdentifier(
-                            "reel_viewer_options_container", "id", ctx.packageName
-                        ).takeIf { it != 0 }
-                            ?: ctx.resources.getIdentifier(
-                                "story_viewer_options", "id", ctx.packageName
-                            )
-                        sCachedStoryOptionsId = id
-                    }
-
-                    if (sCachedStoryOptionsId == 0 || view.id != sCachedStoryOptionsId) return
-                    val container = view as? ViewGroup ?: return
-
-                    injectMentionsButton(container, ctx)
+                // The story options panel is the container the button is attached to.
+                if (sCachedStoryOptionsId == 0) {
+                    @SuppressLint("DiscouragedApi")
+                    val id = ctx.resources.getIdentifier(
+                        "reel_viewer_options_container", "id", ctx.packageName
+                    ).takeIf { it != 0 }
+                        ?: ctx.resources.getIdentifier("story_viewer_options", "id", ctx.packageName)
+                    sCachedStoryOptionsId = id
                 }
+
+                if (sCachedStoryOptionsId == 0 || view.id != sCachedStoryOptionsId) return@after
+                val container = view as? ViewGroup ?: return@after
+
+                injectMentionsButton(container, ctx)
             }
-        )
-    } catch (t: Throwable) {
-        Logger.printException({ "GhostViewStoryMentions hook failed" }, t)
-    }
+        }
+    }.onFailure { Logger.printException({ "GhostViewStoryMentions hook failed" }, it) }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -70,14 +60,14 @@ private fun injectMentionsButton(container: ViewGroup, ctx: Context) {
     val btn = ImageButton(ctx).apply {
         tag = MENTIONS_BTN_TAG
         setImageResource(android.R.drawable.ic_dialog_info)
-        setColorFilter(android.graphics.Color.WHITE)
+        setColorFilter(Color.WHITE)
         background = null
         contentDescription = "View story mentions"
 
         val size = dp(ctx, 36)
         layoutParams = LinearLayout.LayoutParams(size, size)
 
-        setOnClickListener { v ->
+        setOnClickListener {
             // Try to find a media/story object in the container's tag or nearby views
             val mediaObj = findMediaObject(container) ?: run {
                 showMentionsDialog(ctx, emptyList())

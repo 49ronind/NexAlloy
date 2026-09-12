@@ -1,8 +1,6 @@
 package io.github.nexalloy.revanced.facebook.ad
 
 import android.os.Bundle
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
 import io.github.nexalloy.patch
 import io.github.nexalloy.revanced.facebook.AdStoryInspector
 import io.github.nexalloy.revanced.facebook.AUDIENCE_NETWORK_ACTIVITY_CLASS
@@ -48,6 +46,7 @@ import io.github.nexalloy.revanced.facebook.resolveListBuilderAppendMethod
 import io.github.nexalloy.revanced.facebook.resolveListBuilderFactoryMethod
 import io.github.nexalloy.revanced.facebook.resolveInstreamBannerEligibilityMethod
 import io.github.nexalloy.revanced.facebook.resolveStoryAdProviderHooks
+import java.lang.reflect.Method
 
 /**
  * Master patch – ports all FacebookAppAdsRemover hooks into NexAlloy.
@@ -307,7 +306,7 @@ val HideFacebookAds = patch(
     // among onResume / onStart / onCreate(Bundle)), matching upstream's
     // resolveGameAdUiActivityMethods. Falls back to a broader Activity-subclass
     // scan across GAME_AD_ACTIVITY_CLASS_NAMES if neither AN class yields a hook.
-    val gameAdUiHooked = java.util.LinkedHashMap<String, java.lang.reflect.Method>()
+    val gameAdUiHooked = LinkedHashMap<String, Method>()
     listOf(AUDIENCE_NETWORK_ACTIVITY_CLASS, AUDIENCE_NETWORK_REMOTE_ACTIVITY_CLASS).forEach { cn ->
         runCatching {
             val actClass = classLoader.loadClass(cn)
@@ -348,11 +347,8 @@ val HideFacebookAds = patch(
     // ── 14. ProfileReelsAsyncAdsQuery dispatch block ────────────────────
 
     runCatching {
-        val queryDispatch = ::profileReelsAsyncAdsQueryFingerprint.method
-        XposedBridge.hookMethod(queryDispatch, object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam) {
-                param.result = null
-            }
-        })
+        ::profileReelsAsyncAdsQueryFingerprint.hookMethod {
+            before { param -> param.result = null }
+        }
     }
 }

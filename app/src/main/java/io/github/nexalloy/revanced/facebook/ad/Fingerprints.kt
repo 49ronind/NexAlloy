@@ -176,11 +176,10 @@ val reelsBannerRenderMethodsFingerprint = findMethodListDirect {
             .filter { m -> m.paramTypeNames.size == 1 && !m.isConstructor }
     }.getOrDefault(emptyList())
 
-    // Hai truy vấn dưới đây từng là findMethod{}/findClass{} riêng lẻ. Mỗi truy vấn như vậy
-    // tốn một lượt đi hết string index (~110ms trên dex đã đo), kể cả khi nó không khớp gì —
-    // và nhánh slot-queue đúng là không khớp gì trên bản FB được audit (class có tồn tại,
-    // nhưng không còn method void 1-tham-số nào). Chuyển sang hai helper batch giữ nguyên
-    // ngữ nghĩa mà không phải trả giá cho một tag đã chết.
+    // These two used to be separate findMethod{}/findClass{} queries. Each one walks the whole
+    // string index (~110ms on the measured dex) even when it matches nothing, and the slot-queue
+    // branch does match nothing on the audited FB build (the class exists but has no one-arg void
+    // method left). The batch helpers keep the same semantics without paying for a dead tag.
     val asyncAdsDispatch = runCatching {
         methodsUsingAnyOf(listOf("TRENDING_ADS_TRIGGERED_INTERSTITIAL"))
             .filter { m -> m.returnTypeName == "void" && !m.isConstructor && !Modifier.isAbstract(m.modifiers) }
@@ -289,30 +288,30 @@ val feedCsrFilterMethodsFingerprint = findMethodListDirect {
 // ─── Late feed list sanitisers ────────────────────────────────────────────────
 
 /**
- * Tag của mọi tầng "dọn danh sách feed muộn" — sanitiser chạy sau khi feed đã được dựng.
+ * Tags of every "late feed list" layer — sanitisers that run after the feed has been built.
  *
- * Ba tag đầu trước đây nằm trong hai truy vấn findClass{} riêng, và một trong hai truy vấn ấy
- * đòi class phải dùng CẢ HAI chuỗi "handleStorageStories" và "Empty Storage List".
+ * The first three tags used to live in two separate findClass{} queries, and one of them
+ * required a class to use BOTH "handleStorageStories" and "Empty Storage List".
  *
- * Quét dex cho thấy vì sao điều kiện AND đó là một cái bẫy: trên bản Facebook được audit,
- * "handleStorageStories" và "cancelVendingTimerAndAddToPool_" đã biến mất khỏi code, còn
- * "Empty Storage List" thì vẫn còn — và class dùng nó chính là class mà fingerprint muốn tìm,
- * đầy đủ cả method `void(?, ImmutableList, int)` lẫn `getStorageController` /
- * `getCsrStoryCollectionWorker` bên cạnh. Nói cách khác nhánh này không chết, nó chỉ mất một
- * nửa điều kiện, và điều kiện AND biến mất-một-nửa thành mất-tất-cả. Hook đã im lặng không
- * cài suốt từ lúc đó.
+ * A dex scan shows why that AND was a trap: on the audited Facebook build
+ * "handleStorageStories" and "cancelVendingTimerAndAddToPool_" are gone from the code while
+ * "Empty Storage List" is still there — and the class using it is exactly the class the
+ * fingerprint wants, complete with the `void(?, ImmutableList, int)` method and
+ * `getStorageController` / `getCsrStoryCollectionWorker` next to it. The branch was not dead,
+ * it had lost half of its condition, and an AND that loses half loses everything. The hook had
+ * silently not been installed since.
  *
- * Gộp lại thành MỘT lượt batchFindClassUsingStrings với các lifecycle tag vừa lấy lại được
- * hook đã mất, vừa bỏ được hai truy vấn riêng (~110ms mỗi truy vấn mỗi lần cold scan), và tag
- * nào đã biến mất thì từ nay chỉ tốn đúng 0 query thay vì làm hỏng cả nhánh.
+ * Merging them into ONE batchFindClassUsingStrings pass with the lifecycle tags brings the lost
+ * hook back, drops two separate queries (~110ms each on every cold scan), and a tag that
+ * disappears now costs zero queries instead of breaking the whole branch.
  */
 private val LATE_FEED_LIST_TAGS = listOf(
-    // Không còn được code nào dùng trên bản được audit — giữ lại vì miễn phí:
+    // No longer used by any code on the audited build; kept because they cost nothing:
     "handleStorageStories",
     "cancelVendingTimerAndAddToPool_",
-    // Còn sống, và một mình nó định danh đúng class storage-stories:
+    // Still alive, and on its own identifies the storage-stories class:
     "Empty Storage List",
-    // Bốn lifecycle class, mỗi class ba shape:
+    // Four lifecycle classes, three shapes each:
     "CSRNoOpStorageLifecycleImpl",
     "FeedCSRStorageLifecycle",
     "FriendlyFeedCSRStorageLifecycle",
@@ -323,11 +322,11 @@ val lateFeedListMethodsFingerprint = findMethodListDirect {
     val fbUserSession = "com.facebook.auth.usersession.FbUserSession"
     val immutableList = "com.google.common.collect.ImmutableList"
 
-    // Mọi shape đã từng được liệt kê, thử lần lượt trên từng class khớp thay vì cột chặt
-    // shape nào đi với tag nào. Nới rộng như vậy là an toàn vì hook tiêu thụ danh sách này
-    // là loại có kiểm tra item: nó chỉ bỏ đi story tự nhận diện được là quảng cáo, nên một
-    // method không bao giờ thấy quảng cáo thì cũng không bao giờ bị ảnh hưởng. listArgIndex
-    // được HideFacebookAdsPatch suy ra từ tham số ImmutableList thật của method.
+    // Every shape ever listed is tried on every matching class instead of pinning which shape
+    // belongs to which tag. The wider net is safe because the hook consuming this list checks
+    // each item: it only drops stories that identify themselves as ads, so a method that never
+    // sees an ad is never affected. HideFacebookAdsPatch derives listArgIndex from the method's
+    // real ImmutableList parameter.
     val shapes: List<List<String?>> = listOf(
         listOf(null, immutableList, "int"),
         listOf(immutableList, "java.lang.String"),
@@ -336,7 +335,7 @@ val lateFeedListMethodsFingerprint = findMethodListDirect {
         listOf(immutableList),
     )
 
-    val results = ArrayList<org.luckypray.dexkit.result.MethodData>()
+    val results = ArrayList<MethodData>()
     classesUsingAnyOf(LATE_FEED_LIST_TAGS).forEach { cls ->
         shapes.forEach { shape ->
             runCatching {
@@ -475,27 +474,26 @@ val storyAdsInsertionTriggerMethodFingerprint = findMethodDirect {
 /**
  * The Instant Games JavaScript ad bridge — the methods a game calls to ask for an ad.
  *
- * **AUDIT 2026-08 — ghi chú cũ ở đây đã SAI và được thay.** Bản trước viết rằng cả năm anchor
- * đều vắng mặt trên FB575 và việc fingerprint này không khớp gì là "kết quả mong đợi". Đối
- * chiếu trực tiếp với dex đang chạy cho thấy ngược lại: BỐN trong năm anchor còn sống, tất cả
- * trên cùng một class bridge (60 method, trong đó 42 method `void(JSONObject)`, kèm
- * `postMessage(String, String)` mà mục 9 của [HideFacebookAds] cần). Nghĩa là mục 9 và 10 CÓ
- * chạy trên bản này.
+ * **Audit 2026-08 — the previous note here was WRONG and has been replaced.** It said all five
+ * anchors were absent on FB575 and that this fingerprint matching nothing was "expected".
+ * Checking against the running dex shows the opposite: FOUR of the five anchors are alive, all
+ * on the same bridge class (60 methods, 42 of them `void(JSONObject)`, plus the
+ * `postMessage(String, String)` that section 9 of [HideFacebookAds] needs). Sections 9 and 10
+ * DO run on this build.
  *
- * Anchor duy nhất mất thật là `onGetRewardedInterstitialAsync` — trong dex cũng không còn
- * chuỗi `getrewardedinterstitialasync` nào, nên entry cùng tên trong
- * [GAME_AD_UNAVAILABLE_MESSAGE_TYPES] là code chết vô hại. Bốn anchor còn lại được giữ
- * nguyên; anchor mất được giữ lại vì nó không tốn thêm truy vấn nào (cả năm đi chung một lượt
- * batch) và vẫn bắt được thiết bị còn cache module cũ.
+ * The only anchor really gone is `onGetRewardedInterstitialAsync` — the dex has no
+ * `getrewardedinterstitialasync` string left either, so the entry of that name in
+ * [GAME_AD_UNAVAILABLE_MESSAGE_TYPES] is harmless dead code. The other four anchors are kept
+ * as is; the lost one stays because it costs no extra query (all five share one batch pass)
+ * and still catches devices with an old cached module.
  *
- * Lớp phòng thủ một tầng thấp hơn — [quicksilverAdsVoltronGateFingerprint] và
- * [quicksilverBannerAdLoaderMethodsFingerprint] — cũng đã được xác nhận có mặt, nên hai hướng
- * bổ trợ cho nhau chứ không thay thế nhau: gate chặn module ads được nạp, bridge trả lời game
- * nào đã kịp nạp module từ trước.
+ * The defence one layer lower — [quicksilverAdsVoltronGateFingerprint] and
+ * [quicksilverBannerAdLoaderMethodsFingerprint] — is confirmed present as well, so the two
+ * complement rather than replace each other: the gate stops the ads module from loading, the
+ * bridge answers games that loaded it earlier.
  *
- * Bài học rút ra cho lần audit sau: một `dexMethodList` rỗng KHÔNG bao giờ là bằng chứng rằng
- * target đã biến mất — nó chỉ là một danh sách rỗng bị `runCatching` nuốt mất. Muốn biết thì
- * phải quét dex.
+ * Lesson for the next audit: an empty `dexMethodList` is NEVER proof that a target is gone —
+ * it is only an empty list swallowed by `runCatching`. Scan the dex to know.
  */
 val gameAdRequestMethodsFingerprint = findMethodListDirect {
     listOf(

@@ -10,11 +10,16 @@ import android.view.ViewGroup
 import android.webkit.WebView
 import android.widget.TextView
 import de.robv.android.xposed.XC_MethodHook
+import de.robv.android.xposed.XSharedPreferences
 import de.robv.android.xposed.XposedBridge
+import io.github.nexalloy.BuildConfig
+import io.github.nexalloy.hookMethod
+import io.github.nexalloy.isStatic
 import org.json.JSONObject
 import java.lang.reflect.Field
+import java.lang.reflect.Member
 import java.lang.reflect.Method
-import java.lang.reflect.Modifier
+import java.util.ArrayDeque
 import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.LinkedHashMap
@@ -28,7 +33,6 @@ import java.util.concurrent.atomic.AtomicLong
 const val FB_TAG = "NexAlloy/Facebook"
 private const val BEFORE_SIZE_EXTRA = "nexalloy_fb_ads_before_size"
 private const val GAME_AD_SUCCESS_INSTANCE_PREFIX = "nexalloy_fb_noop_ad"
-private const val HOOK_HIT_LOG_EVERY = 25
 private const val GAME_AD_RECENT_WINDOW_MS    = 30_000L
 private const val GAME_AD_PROMISE_WINDOW_MS   = 10 * 60_000L
 private const val AUDIENCE_NETWORK_REWARD_CLOSE_RETRY_WINDOW_MS = 35_000L
@@ -184,8 +188,8 @@ val HARD_BLOCKED_GAME_AD_ACTIVITY_CLASS_NAMES = setOf(NEKO_PLAYABLE_ACTIVITY_CLA
  * build can be patched without recompiling. Returns an empty set when unset.
  */
 fun facebookClassNameOverrides(key: String): Set<String> = runCatching {
-    de.robv.android.xposed.XSharedPreferences(
-        io.github.nexalloy.BuildConfig.APPLICATION_ID, "facebook_overrides"
+    XSharedPreferences(
+        BuildConfig.APPLICATION_ID, "facebook_overrides"
     ).takeIf { it.file.canRead() }
         ?.getString(key, null)
         ?.split(',')
@@ -376,7 +380,7 @@ class AdStoryInspector(private val adKindEnumClass: Class<*>) {
         var cur: Class<*>? = type
         while (cur != null && cur != Any::class.java) {
             cur.declaredMethods.forEach { m ->
-                if (!Modifier.isStatic(m.modifiers) && m.parameterCount == 0 && m.returnType == adKindEnumClass) {
+                if (!m.isStatic && m.parameterCount == 0 && m.returnType == adKindEnumClass) {
                     m.isAccessible = true; map.putIfAbsent("${cur.name}#${m.name}", m)
                 }
             }; cur = cur.superclass
@@ -386,7 +390,7 @@ class AdStoryInspector(private val adKindEnumClass: Class<*>) {
     private fun fieldsFor(type: Class<*>) = fieldCache.getOrPut(type) {
         val list = ArrayList<Field>(); var cur: Class<*>? = type
         while (cur != null && cur != Any::class.java && list.size < 24) {
-            cur.declaredFields.forEach { f -> if (!Modifier.isStatic(f.modifiers) && list.size < 24) { f.isAccessible = true; list.add(f) } }; cur = cur.superclass
+            cur.declaredFields.forEach { f -> if (!f.isStatic && list.size < 24) { f.isAccessible = true; list.add(f) } }; cur = cur.superclass
         }; list
     }
 
@@ -402,7 +406,7 @@ class AdStoryInspector(private val adKindEnumClass: Class<*>) {
     private fun allMethodsFor(type: Class<*>): List<Method> = allMethodCache.getOrPut(type) {
         val map = LinkedHashMap<String, Method>(); var cur: Class<*>? = type
         while (cur != null && cur != Any::class.java) {
-            cur.declaredMethods.forEach { m -> if (!Modifier.isStatic(m.modifiers)) { m.isAccessible = true; map.putIfAbsent("${cur.name}#${m.name}/${m.parameterCount}", m) } }; cur = cur.superclass
+            cur.declaredMethods.forEach { m -> if (!m.isStatic) { m.isAccessible = true; map.putIfAbsent("${cur.name}#${m.name}/${m.parameterCount}", m) } }; cur = cur.superclass
         }; map.values.toList()
     }
 
@@ -751,7 +755,7 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
     private fun stringFieldsFor(type: Class<*>) = stringFieldCache.getOrPut(type) {
         val list = ArrayList<Field>(); var cur: Class<*>? = type
         while (cur != null && cur != Any::class.java && list.size < 12) {
-            cur.declaredFields.forEach { f -> if (!Modifier.isStatic(f.modifiers) && f.type == String::class.java && list.size < 12) { f.isAccessible = true; list.add(f) } }; cur = cur.superclass
+            cur.declaredFields.forEach { f -> if (!f.isStatic && f.type == String::class.java && list.size < 12) { f.isAccessible = true; list.add(f) } }; cur = cur.superclass
         }; list
     }
 
@@ -778,8 +782,8 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
     private fun computeAllInstanceMethods(type: Class<*>): List<Method> {
         val map = LinkedHashMap<String, Method>(); var cur: Class<*>? = type
         while (cur != null && cur != Any::class.java) {
-            cur.declaredMethods.forEach { m -> if (!Modifier.isStatic(m.modifiers)) { m.isAccessible = true; map.putIfAbsent("${cur.name}#${m.name}/${m.parameterCount}", m) } }
-            cur.interfaces.forEach { iface -> iface.declaredMethods.forEach { m -> if (!Modifier.isStatic(m.modifiers)) { m.isAccessible = true; map.putIfAbsent("${iface.name}#${m.name}/${m.parameterCount}", m) } } }
+            cur.declaredMethods.forEach { m -> if (!m.isStatic) { m.isAccessible = true; map.putIfAbsent("${cur.name}#${m.name}/${m.parameterCount}", m) } }
+            cur.interfaces.forEach { iface -> iface.declaredMethods.forEach { m -> if (!m.isStatic) { m.isAccessible = true; map.putIfAbsent("${iface.name}#${m.name}/${m.parameterCount}", m) } } }
             cur = cur.superclass
         }; return map.values.toList()
     }
@@ -788,15 +792,6 @@ class FeedItemInspector(itemContractTypes: Collection<Class<*>>) {
         if (method == null || target == null) null else runCatching { method.invoke(target) }.getOrNull()
 }
 
-// ─── Logging ──────────────────────────────────────────────────────────────────
-
-/**
- * Diagnostics are not wired up in NexAlloy, so this is deliberately empty. It used to
- * do a ConcurrentHashMap lookup plus an atomic increment on every hook hit and then
- * throw the number away — measurable overhead on hooks that fire per rendered item.
- */
-@Suppress("UNUSED_PARAMETER")
-fun logHookHitThrottled(hookName: String, method: Method, detail: String? = null) = Unit
 
 /** Stable per-method key used to dedup hook installation across the DexKit-resolved and
  *  the FB571 hardcoded-name fast paths (both can resolve the same underlying method). */
@@ -811,45 +806,45 @@ fun hookListBuilderAppend(method: Method, inspector: AdStoryInspector) {
     if (listArgIndex == null) {
         return
     }
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) {
+    method.hookMethod {
+        before { param ->
             param.setObjectExtra(BEFORE_SIZE_EXTRA, (param.args.getOrNull(listArgIndex) as? List<*>)?.size ?: -1)
         }
-        override fun afterHookedMethod(param: MethodHookParam) {
-            val beforeSize = param.getObjectExtra(BEFORE_SIZE_EXTRA) as? Int ?: return
-            val list = param.args.getOrNull(listArgIndex) as? MutableList<Any?> ?: return
-            if (beforeSize < 0 || beforeSize > list.size) return
+        after { param ->
+            val beforeSize = param.getObjectExtra(BEFORE_SIZE_EXTRA) as? Int ?: return@after
+            val list = param.args.getOrNull(listArgIndex) as? MutableList<Any?> ?: return@after
+            if (beforeSize < 0 || beforeSize > list.size) return@after
             var removed = 0
             for (i in list.lastIndex downTo beforeSize) { if (inspector.containsAdStory(list[i])) { list.removeAt(i); removed++ } }
         }
-    })
+    }
 }
 
 fun hookListResultFilter(method: Method, source: String, inspector: AdStoryInspector) {
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun afterHookedMethod(param: MethodHookParam) {
-            val result = param.result as? MutableList<Any?> ?: return
-            val removed = filterAdItems(result, inspector)
+    method.hookMethod {
+        after { param ->
+            val result = param.result as? MutableList<Any?> ?: return@after
+            filterAdItems(result, inspector)
         }
-    })
+    }
 }
 
 fun hookPluginPackFallback(method: Method, inspector: AdStoryInspector) {
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) {
+    method.hookMethod {
+        before { param ->
             if (isAdOnlyPluginPack(param.thisObject)) {
-                param.result = arrayListOf<Any?>(); return
+                param.result = arrayListOf<Any?>(); return@before
             }
             if (inspector.containsAdStory(param.thisObject)) {
                 param.result = arrayListOf<Any?>()
             }
         }
-        override fun afterHookedMethod(param: MethodHookParam) {
-            if (isAdOnlyPluginPack(param.thisObject)) return
-            val result = param.result as? MutableList<Any?> ?: return
-            val removed = filterAdItems(result, inspector)
+        after { param ->
+            if (isAdOnlyPluginPack(param.thisObject)) return@after
+            val result = param.result as? MutableList<Any?> ?: return@after
+            filterAdItems(result, inspector)
         }
-    })
+    }
 }
 
 /**
@@ -877,7 +872,7 @@ private fun isAdOnlyPluginPack(instance: Any): Boolean {
     return marketplaceAdsPackCache.getOrPut(className) {
         runCatching {
             instance.javaClass.declaredMethods
-                .filter { m -> m.parameterCount == 0 && m.returnType == String::class.java && !Modifier.isStatic(m.modifiers) }
+                .filter { m -> m.parameterCount == 0 && m.returnType == String::class.java && !m.isStatic }
                 .any { m ->
                     m.isAccessible = true
                     val name = m.invoke(instance) as? String ?: return@any false
@@ -915,14 +910,14 @@ private val pluginHooksInstalled = Collections.newSetFromMap(ConcurrentHashMap<S
  */
 fun hookPluginPackList(method: Method) {
     if (!pluginHooksInstalled.add(methodHookKey(method))) return
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun afterHookedMethod(param: MethodHookParam) {
-            val instance = param.thisObject ?: return
-            if (!isAdOnlyPluginPack(instance)) return
-            if ((param.result as? Collection<*>)?.isEmpty() == true) return
+    method.hookMethod {
+        after { param ->
+            val instance = param.thisObject ?: return@after
+            if (!isAdOnlyPluginPack(instance)) return@after
+            if ((param.result as? Collection<*>)?.isEmpty() == true) return@after
             param.result = emptyList<Any?>()
         }
-    })
+    }
 }
 
 /**
@@ -934,13 +929,13 @@ fun hookPluginPackList(method: Method) {
  */
 fun hookPluginDescriptorGate(method: Method) {
     if (!pluginHooksInstalled.add(methodHookKey(method))) return
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) {
-            val instance = param.thisObject ?: return
-            if (!isAdOnlyPluginPack(instance)) return
+    method.hookMethod {
+        before { param ->
+            val instance = param.thisObject ?: return@before
+            if (!isAdOnlyPluginPack(instance)) return@before
             param.result = false
         }
-    })
+    }
 }
 
 /**
@@ -974,20 +969,20 @@ fun hookTimelineStoryRender(method: Method, inspector: FeedItemInspector) {
     // field of that type is the story. "First interface-typed field" would pick the wrong
     // one — the component holds several unrelated obfuscated fields.
     val storyType = method.declaringClass.declaredMethods.firstOrNull { candidate ->
-        candidate.returnType == java.lang.Boolean.TYPE && candidate.parameterCount == 1
+        candidate.returnType == Boolean::class.javaPrimitiveType && candidate.parameterCount == 1
     }?.parameterTypes?.firstOrNull() ?: return
 
     val storyField = method.declaringClass.declaredFields.firstOrNull { field ->
-        !Modifier.isStatic(field.modifiers) && field.type == storyType
+        !field.isStatic && field.type == storyType
     }?.apply { isAccessible = true } ?: return
 
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) {
-            val story = runCatching { storyField.get(param.thisObject) }.getOrNull() ?: return
-            if (!runCatching { inspector.hasAdTrackingId(story) }.getOrDefault(false)) return
+    method.hookMethod {
+        before { param ->
+            val story = runCatching { storyField.get(param.thisObject) }.getOrNull() ?: return@before
+            if (!runCatching { inspector.hasAdTrackingId(story) }.getOrDefault(false)) return@before
             param.result = null
         }
-    })
+    }
 }
 
 // ─── Hook installers – ad REQUEST layer ───────────────────────────────────────
@@ -1012,9 +1007,9 @@ fun hookTimelineStoryRender(method: Method, inspector: FeedItemInspector) {
 fun hookAdRequestNoOp(method: Method) {
     if (method.returnType != Void.TYPE) return
     if (!pluginHooksInstalled.add(methodHookKey(method))) return
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) { param.result = null }
-    })
+    method.hookMethod {
+        before { param -> param.result = null }
+    }
 }
 
 /**
@@ -1033,9 +1028,9 @@ fun hookNullAdResult(method: Method) {
     val returnType = method.returnType
     if (returnType == Void.TYPE || returnType.isPrimitive) return
     if (!pluginHooksInstalled.add(methodHookKey(method))) return
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) { param.result = null }
-    })
+    method.hookMethod {
+        before { param -> param.result = null }
+    }
 }
 
 /**
@@ -1084,139 +1079,135 @@ fun hookInstantGamesAdsLoader(classLoader: ClassLoader) {
  * slot, so answering "not eligible" removes the slot rather than emptying it.
  */
 fun hookForceBoolean(method: Method, value: Boolean = false) {
-    if (method.returnType != java.lang.Boolean.TYPE && method.returnType != java.lang.Boolean::class.java) return
+    if (method.returnType != Boolean::class.javaPrimitiveType && method.returnType != Boolean::class.javaObjectType) return
     if (!pluginHooksInstalled.add(methodHookKey(method))) return
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) { param.result = value }
-    })
+    method.hookMethod {
+        before { param -> param.result = value }
+    }
 }
 
 fun hookAdPluginListBuilder(method: Method) {
     if (!pluginHooksInstalled.add(methodHookKey(method))) return
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun afterHookedMethod(param: MethodHookParam) {
-            val current = param.result as? Iterable<*> ?: return
+    method.hookMethod {
+        after { param ->
+            val current = param.result as? Iterable<*> ?: return@after
             val kept = ArrayList<Any?>()
             var removed = 0
             for (plugin in current) {
                 if (plugin != null && isAdOnlyPluginPack(plugin)) removed++ else kept.add(plugin)
             }
-            if (removed == 0) return
-            param.result = buildImmutableListLike(param.result, kept) ?: return
+            if (removed == 0) return@after
+            param.result = buildImmutableListLike(param.result, kept) ?: return@after
         }
-    })
+    }
 }
 
 // ─── Hook installers – Feed CSR / late-list ───────────────────────────────────
 
 fun hookFeedCsrFilterInput(hook: FeedCsrFilterHook, inspector: FeedItemInspector): Boolean {
     if (!feedCsrMethodsHooked.add(methodHookKey(hook.method))) return false
-    XposedBridge.hookMethod(hook.method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) {
-            val originalList = param.args.getOrNull(hook.listArgIndex) as? Iterable<*> ?: return
+    hook.method.hookMethod {
+        before { param ->
+            val originalList = param.args.getOrNull(hook.listArgIndex) as? Iterable<*> ?: return@before
             val kept = ArrayList<Any?>(); var removed = 0
             // Strict check on the way IN: Facebook's own pipeline hasn't finished
             // resolving every item yet here, so the broader heuristic risks false
             // positives — only drop items we're certain are ads.
             for (item in originalList) { if (inspector.isDefinitelySponsoredFeedItem(item)) removed++ else kept.add(item) }
-            if (removed <= 0) return
+            if (removed <= 0) return@before
             buildImmutableListLike(param.args.getOrNull(hook.listArgIndex), kept)?.let { param.args[hook.listArgIndex] = it }
         }
-        override fun afterHookedMethod(param: MethodHookParam) {
-            val resultItems = extractFeedItemsFromResult(param.result) ?: return
+        after { param ->
+            val resultItems = extractFeedItemsFromResult(param.result) ?: return@after
             val kept = ArrayList<Any?>(); var removed = 0
             // Upstream uses the STRICT check here too (isDefinitelySponsoredFeedItem),
             // not the broader heuristic — kept 1:1 with FacebookAppAdsRemover.
             for (item in resultItems) { if (inspector.isDefinitelySponsoredFeedItem(item)) removed++ else kept.add(item) }
             if (removed > 0) replaceFeedItemsInResult(param, kept)
         }
-    })
+    }
     return true
 }
 
 fun hookLateFeedListSanitizer(hook: FeedListSanitizerHook, inspector: FeedItemInspector): Boolean {
     if (!lateFeedMethodsHooked.add(methodHookKey(hook.method))) return false
-    XposedBridge.hookMethod(hook.method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) {
-            val originalList = param.args.getOrNull(hook.listArgIndex) as? Iterable<*> ?: return
+    hook.method.hookMethod {
+        before { param ->
+            val originalList = param.args.getOrNull(hook.listArgIndex) as? Iterable<*> ?: return@before
             val kept = ArrayList<Any?>(); var removed = 0
             // Upstream uses the STRICT check (isDefinitelySponsoredFeedItem) — kept 1:1.
             for (item in originalList) { if (inspector.isDefinitelySponsoredFeedItem(item)) removed++ else kept.add(item) }
-            if (removed <= 0) return
+            if (removed <= 0) return@before
             buildImmutableListLike(param.args.getOrNull(hook.listArgIndex), kept)?.let {
                 param.args[hook.listArgIndex] = it
             }
         }
-    })
+    }
     return true
 }
 
 fun hookStoryPoolAdd(method: Method, inspector: FeedItemInspector) {
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) {
+    method.hookMethod {
+        before { param ->
             val item = param.args.getOrNull(0)
-            // Chỉ chặn khi CHẮC CHẮN là sponsored (strict). Upstream còn gọi
-            // isSponsoredFeedItem(broad) + describe() ở đây nhưng CHỈ để đưa vào logger;
-            // logHookHitThrottled trong NexAlloy là no-op nên hai lệnh reflection nặng
-            // đó chạy mỗi story khi cuộn feed mà không làm gì — đã lược để tiết kiệm pin.
-            if (inspector.storyPoolBlockReason(item) == null) return
+            // Block only what is DEFINITELY sponsored (strict). Upstream also calls
+            // isSponsoredFeedItem(broad) + describe() here, but only to feed its logger; with no
+            // logger those two heavy reflection walks would run for every story while scrolling
+            // for nothing, so they are left out to save battery.
+            if (inspector.storyPoolBlockReason(item) == null) return@before
             param.result = false
         }
-    })
+    }
 }
 
 fun hookInstreamBannerEligibility(method: Method) {
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) { logHookHitThrottled("bannerState", method); param.result = false }
-    })
+    method.hookMethod {
+        before { param -> param.result = false }
+    }
 }
 
 fun hookIndicatorPillAdEligibility(method: Method) {
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) { logHookHitThrottled("indicatorPill", method); param.result = false }
-    })
+    method.hookMethod {
+        before { param -> param.result = false }
+    }
 }
 
 fun hookReelsBannerRender(method: Method) {
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) { logHookHitThrottled("reelsBannerRender", method); param.result = null }
-    })
+    method.hookMethod {
+        before { param -> param.result = null }
+    }
 }
 
 // ─── Hook installers – Sponsored pool ────────────────────────────────────────
 
 fun hookSponsoredPoolAdd(method: Method): Boolean {
     if (!sponsoredPoolMethodsHooked.add(methodHookKey(method))) return false
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) { param.result = false }
-    })
+    method.hookMethod {
+        before { param -> param.result = false }
+    }
     return true
 }
 
 fun hookSponsoredStoryNext(method: Method) {
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) { param.result = null }
-    })
+    method.hookMethod {
+        before { param -> param.result = null }
+    }
 }
 
 fun hookSponsoredPoolListMethods(poolClass: Class<*>) {
-    var hooked = 0
-    poolClass.declaredMethods.filter { m -> !Modifier.isStatic(m.modifiers) && m.parameterCount == 0 && List::class.java.isAssignableFrom(m.returnType) }.forEach { m ->
+    poolClass.declaredMethods.filter { m -> !m.isStatic && m.parameterCount == 0 && List::class.java.isAssignableFrom(m.returnType) }.forEach { m ->
         m.isAccessible = true
-        XposedBridge.hookMethod(m, object : XC_MethodHook() { override fun beforeHookedMethod(param: MethodHookParam) { param.result = arrayListOf<Any?>() } })
-        hooked++
+        m.hookMethod { before { param -> param.result = arrayListOf<Any?>() } }
     }
 }
 
 fun hookSponsoredPoolResultMethods(poolClass: Class<*>) {
-    var hooked = 0
     poolClass.declaredMethods.filter { m ->
-        !Modifier.isStatic(m.modifiers) && isSponsoredResultCarrier(m.returnType) &&
+        !m.isStatic && isSponsoredResultCarrier(m.returnType) &&
         (m.parameterCount == 0 || (m.parameterCount == 1 && m.parameterTypes[0] == Boolean::class.javaPrimitiveType))
     }.forEach { m ->
         m.isAccessible = true
-        XposedBridge.hookMethod(m, object : XC_MethodHook() { override fun beforeHookedMethod(param: MethodHookParam) { buildSponsoredEmptyResult(m.returnType)?.let { param.result = it } } })
-        hooked++
+        m.hookMethod { before { param -> buildSponsoredEmptyResult(m.returnType)?.let { param.result = it } } }
     }
 }
 
@@ -1225,15 +1216,13 @@ fun hookSponsoredPoolResultMethods(poolClass: Class<*>) {
  *  these back the "next sponsored story" vending path alongside the single-item
  *  [hookSponsoredStoryNext] hook. */
 fun hookSponsoredStoryListMethods(managerClass: Class<*>) {
-    var hooked = 0
-    managerClass.declaredMethods.filter { m -> !Modifier.isStatic(m.modifiers) && isSponsoredStoryListMethod(m) }.forEach { m ->
+    managerClass.declaredMethods.filter { m -> !m.isStatic && isSponsoredStoryListMethod(m) }.forEach { m ->
         m.isAccessible = true
-        XposedBridge.hookMethod(m, object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam) {
+        m.hookMethod {
+            before { param ->
                 buildEmptyListReturn(m.returnType)?.let { param.result = it }
             }
-        })
-        hooked++
+        }
     }
 }
 
@@ -1279,7 +1268,7 @@ private fun resolveListBuilderMethods(clazz: Class<*>): List<Method> {
     val methods = LinkedHashMap<String, Method>()
     (clazz.declaredMethods + clazz.methods).forEach { method ->
         if (method.name != "<init>" && method.name != "<clinit>") {
-            methods.putIfAbsent("${method.name}/${method.parameterCount}/${Modifier.isStatic(method.modifiers)}", method)
+            methods.putIfAbsent("${method.name}/${method.parameterCount}/${method.isStatic}", method)
         }
     }
     return methods.values.toList()
@@ -1290,9 +1279,9 @@ private fun scoreAppendMethod(method: Method, owner: Class<*>): Int {
     var score = 0
     if (listIndex == method.parameterCount - 1) score += 10_000
     if (method.parameterCount == 6) score += 5_000
-    if (!Modifier.isStatic(method.modifiers)) score += 2_000
-    if (Modifier.isStatic(method.modifiers) && method.parameterTypes.getOrNull(1) == owner) score += 1_500
-    if (Modifier.isStatic(method.modifiers) && method.parameterTypes.firstOrNull() == owner) score += 750
+    if (!method.isStatic) score += 2_000
+    if (method.isStatic && method.parameterTypes.getOrNull(1) == owner) score += 1_500
+    if (method.isStatic && method.parameterTypes.firstOrNull() == owner) score += 750
     score -= method.parameterCount * 10
     return score
 }
@@ -1326,7 +1315,7 @@ fun resolveListBuilderAppendMethod(listBuilderClass: Class<*>): Method =
 fun resolveListBuilderFactoryMethod(listBuilderClass: Class<*>): Method? =
     resolveListBuilderMethods(listBuilderClass)
         .filter { method ->
-            Modifier.isStatic(method.modifiers) &&
+            method.isStatic &&
             method.returnType == ArrayList::class.java &&
             method.parameterTypes.lastOrNull() == Boolean::class.javaPrimitiveType &&
             (method.parameterTypes.firstOrNull() == listBuilderClass || method.parameterTypes.getOrNull(1) == listBuilderClass)
@@ -1337,51 +1326,50 @@ fun resolveListBuilderFactoryMethod(listBuilderClass: Class<*>): Method? =
 // ─── Hook installers – Story ad providers ────────────────────────────────────
 
 fun hookStoryAdsNoOp(method: Method, reason: String = "story ad", source: String = method.declaringClass.name) {
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) {
+    method.hookMethod {
+        before { param ->
             param.result = null
         }
-    })
+    }
 }
 
 fun hookStoryAdsMerge(method: Method, source: String = method.declaringClass.name) {
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) {
+    method.hookMethod {
+        before { param ->
             val originalBuckets = param.args.getOrNull(2)
             if (originalBuckets != null) {
                 param.result = originalBuckets
             }
         }
-    })
+    }
 }
 
 fun hookStoryAdProvider(provider: StoryAdProviderHooks) {
     if (!storyAdProviderClassesHooked.add(provider.providerClass.name)) return
-    val hooked = ArrayList<String>()
     provider.mergeMethod?.let { method ->
-        hookStoryAdsMerge(method, provider.providerClass.name); hooked.add("merge")
+        hookStoryAdsMerge(method, provider.providerClass.name)
     }
     provider.fetchMoreAdsMethod?.let { method ->
-        hookStoryAdsNoOp(method, "story ad fetchMoreAds", provider.providerClass.name); hooked.add("fetchMoreAds")
+        hookStoryAdsNoOp(method, "story ad fetchMoreAds", provider.providerClass.name)
     }
     provider.deferredUpdateMethod?.let { method ->
-        hookStoryAdsNoOp(method, "story ad deferred update", provider.providerClass.name); hooked.add("deferredUpdate")
+        hookStoryAdsNoOp(method, "story ad deferred update", provider.providerClass.name)
     }
     provider.insertionTriggerMethod?.let { method ->
-        hookStoryAdsNoOp(method, "story ad insertion trigger", provider.providerClass.name); hooked.add("insertionTrigger")
+        hookStoryAdsNoOp(method, "story ad insertion trigger", provider.providerClass.name)
     }
 }
 
 // ─── Hook installers – Game ads ───────────────────────────────────────────────
 
 fun hookGameAdRequest(method: Method) {
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) {
-            val payload = param.args.getOrNull(0) ?: return
+    method.hookMethod {
+        before { param ->
+            val payload = param.args.getOrNull(0) ?: return@before
             val messageType = inferGameAdMessageType(method, payload)
             rememberGameAdPayload(param.thisObject, payload, messageType)
-            if (rejectUnavailableGameAdPayloadIfNeeded(param.thisObject, payload, messageType, "request ${method.declaringClass.name}.${method.name}")) { param.result = null; return }
-            if (!shouldAutofixGameAdMessage(messageType)) return
+            if (rejectUnavailableGameAdPayloadIfNeeded(param.thisObject, payload, messageType, "request ${method.declaringClass.name}.${method.name}")) { param.result = null; return@before }
+            if (!shouldAutofixGameAdMessage(messageType)) return@before
             if (resolveGameAdPayload(param.thisObject, payload, messageType)) {
                 dispatchPostResolveGameAdSignals(param.thisObject, payload, messageType)
                 param.result = null
@@ -1389,18 +1377,18 @@ fun hookGameAdRequest(method: Method) {
                 param.result = null
             }
         }
-    })
+    }
 }
 
 fun hookGameAdBridge(method: Method) {
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) {
-            val raw = param.args.getOrNull(0) as? String ?: return
-            val payload = runCatching { JSONObject(raw) }.getOrNull() ?: return
-            val type = payload.optString("type"); if (type !in GAME_AD_MESSAGE_TYPES) return
+    method.hookMethod {
+        before { param ->
+            val raw = param.args.getOrNull(0) as? String ?: return@before
+            val payload = runCatching { JSONObject(raw) }.getOrNull() ?: return@before
+            val type = payload.optString("type"); if (type !in GAME_AD_MESSAGE_TYPES) return@before
             rememberGameAdPayload(param.thisObject, payload, type)
-            if (rejectUnavailableGameAdPayloadIfNeeded(param.thisObject, payload, type, "bridge ${method.declaringClass.name}.${method.name}")) { param.result = null; return }
-            if (!shouldAutofixGameAdMessage(type)) return
+            if (rejectUnavailableGameAdPayloadIfNeeded(param.thisObject, payload, type, "bridge ${method.declaringClass.name}.${method.name}")) { param.result = null; return@before }
+            if (!shouldAutofixGameAdMessage(type)) return@before
             if (resolveGameAdPayload(param.thisObject, payload, type)) {
                 dispatchPostResolveGameAdSignals(param.thisObject, payload, type)
                 param.result = null
@@ -1408,7 +1396,7 @@ fun hookGameAdBridge(method: Method) {
                 param.result = null
             }
         }
-    })
+    }
 }
 
 /** Hook resolve/reject methods on the bridge class for deeper interception. */
@@ -1417,46 +1405,45 @@ fun hookGameAdResultMethods(bridgeClass: Class<*>) {
     val resolveMethod = resolveGameAdResolveMethod(bridgeClass)
     val rejectMethod  = resolveGameAdRejectMethod(bridgeClass)
     val bridgeRejectMethod = resolveGameAdBridgeRejectMethod(bridgeClass)
-    var hooked = 0
 
     resolveMethod?.let { m ->
-        XposedBridge.hookMethod(m, object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam) {
-                val promiseId = param.args.getOrNull(0) as? String ?: return
-                val snapshot = gameAdPromiseSnapshots[promiseId] ?: return
-                if (snapshot.messageType !in GAME_AD_MESSAGE_TYPES) return
-                if (!shouldAutofixGameAdMessage(snapshot.messageType)) return
+        m.hookMethod {
+            before { param ->
+                val promiseId = param.args.getOrNull(0) as? String ?: return@before
+                val snapshot = gameAdPromiseSnapshots[promiseId] ?: return@before
+                if (snapshot.messageType !in GAME_AD_MESSAGE_TYPES) return@before
+                if (!shouldAutofixGameAdMessage(snapshot.messageType)) return@before
                 val original = param.args.getOrNull(1)
                 param.args[1] = forceGameAdSuccessResult(promiseId, original, snapshot.payload, snapshot.messageType)
             }
-        }); hooked++
+        }
     }
 
     if (rejectMethod != null && resolveMethod != null) {
-        XposedBridge.hookMethod(rejectMethod, object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam) {
-                val promiseId = param.args.getOrNull(0) as? String ?: return
+        rejectMethod.hookMethod {
+            before { param ->
+                val promiseId = param.args.getOrNull(0) as? String ?: return@before
                 val reason = param.args.drop(1).joinToString(" ") { it?.toString().orEmpty() }
-                if (!shouldConvertGameAdRejectToSuccess(promiseId, reason)) return
+                if (!shouldConvertGameAdRejectToSuccess(promiseId, reason)) return@before
                 val snapshot = gameAdPromiseSnapshots[promiseId]
                 val success = forceGameAdSuccessResult(promiseId, null, snapshot?.payload, snapshot?.messageType ?: gameAdPromiseTypeFromReason(reason))
                 runCatching { XposedBridge.invokeOriginalMethod(resolveMethod, param.thisObject, arrayOf(promiseId, success)); param.result = null }
             }
-        }); hooked++
+        }
     }
 
     if (bridgeRejectMethod != null && resolveMethod != null && bridgeRejectMethod != rejectMethod) {
-        XposedBridge.hookMethod(bridgeRejectMethod, object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam) {
-                val payload = param.args.getOrNull(2) as? JSONObject ?: return
-                val promiseId = extractPromiseId(payload) ?: return
+        bridgeRejectMethod.hookMethod {
+            before { param ->
+                val payload = param.args.getOrNull(2) as? JSONObject ?: return@before
+                val promiseId = extractPromiseId(payload) ?: return@before
                 val reason = param.args.take(2).joinToString(" ") { it?.toString().orEmpty() }
-                if (!shouldConvertGameAdRejectToSuccess(promiseId, reason)) return
+                if (!shouldConvertGameAdRejectToSuccess(promiseId, reason)) return@before
                 val snapshot = gameAdPromiseSnapshots[promiseId]
                 val success = forceGameAdSuccessResult(promiseId, null, snapshot?.payload ?: payload, snapshot?.messageType ?: gameAdPromiseTypeFromReason(reason))
                 runCatching { XposedBridge.invokeOriginalMethod(resolveMethod, param.thisObject, arrayOf(promiseId, success)); param.result = null }
             }
-        }); hooked++
+        }
     }
 }
 
@@ -1464,49 +1451,48 @@ fun hookGameAdResultMethods(bridgeClass: Class<*>) {
 fun hookGameAdServiceDispatchMethods(bridgeClass: Class<*>) {
     if (!gameAdServiceDispatchHooksInstalled.compareAndSet(0, 1)) return
     val methods = (bridgeClass.declaredMethods + bridgeClass.methods).filter { m ->
-        !Modifier.isStatic(m.modifiers) && m.returnType == Void.TYPE && m.parameterCount == 2 && m.parameterTypes[0] == Bundle::class.java
+        !m.isStatic && m.returnType == Void.TYPE && m.parameterCount == 2 && m.parameterTypes[0] == Bundle::class.java
     }.distinctBy { m -> m.name + m.parameterTypes.joinToString { it.name } }
-    var hooked = 0
     methods.forEach { m ->
         m.isAccessible = true
-        XposedBridge.hookMethod(m, object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam) {
-                val bundle = param.args.getOrNull(0) as? Bundle ?: return
-                val messageType = param.args.getOrNull(1)?.toString()?.lowercase()?.takeIf { it in GAME_AD_MESSAGE_TYPES } ?: return
+        m.hookMethod {
+            before { param ->
+                val bundle = param.args.getOrNull(0) as? Bundle ?: return@before
+                val messageType = param.args.getOrNull(1)?.toString()?.lowercase()?.takeIf { it in GAME_AD_MESSAGE_TYPES } ?: return@before
                 val payload = buildGameAdPayloadFromServiceBundle(bundle, messageType)
                 rememberGameAdPayload(param.thisObject, payload, messageType)
-                if (rejectUnavailableGameAdPayloadIfNeeded(param.thisObject, payload, messageType, "service dispatch ${m.declaringClass.name}.${m.name}")) { param.result = null; return }
-                if (!shouldAutofixGameAdMessage(messageType)) return
+                if (rejectUnavailableGameAdPayloadIfNeeded(param.thisObject, payload, messageType, "service dispatch ${m.declaringClass.name}.${m.name}")) { param.result = null; return@before }
+                if (!shouldAutofixGameAdMessage(messageType)) return@before
                 if (resolveGameAdPayload(param.thisObject, payload, messageType)) {
                     dispatchPostResolveGameAdSignals(param.thisObject, payload, messageType); param.result = null
                 }
             }
-        }); hooked++
+        }
     }
 }
 
 fun hookPlayableAdActivity(method: Method) {
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun afterHookedMethod(param: MethodHookParam) {
-            val activity = param.thisObject as? Activity ?: return
-            if (activity.javaClass.name != method.declaringClass.name) return
+    method.hookMethod {
+        after { param ->
+            val activity = param.thisObject as? Activity ?: return@after
+            if (activity.javaClass.name != method.declaringClass.name) return@after
             handleGameAdActivity(activity, "direct hook ${method.declaringClass.name}.${method.name}")
         }
-    })
+    }
 }
 
 fun hookGlobalGameAdActivityLifecycleFallback() {
     val onResume = (Activity::class.java.declaredMethods + Activity::class.java.methods)
         .firstOrNull { m -> m.name == "onResume" && m.parameterCount == 0 }?.apply { isAccessible = true } ?: return
-    XposedBridge.hookMethod(onResume, object : XC_MethodHook() {
-        override fun afterHookedMethod(param: MethodHookParam) {
-            val activity = param.thisObject as? Activity ?: return
+    onResume.hookMethod {
+        after { param ->
+            val activity = param.thisObject as? Activity ?: return@after
             // Always schedule a surface sweep on resume (catches async ad loads)
             scheduleGameAdSurfaceSweep(activity.window?.decorView, "activity resume ${activity.javaClass.name}")
-            if (activity.javaClass.name !in GAME_AD_ACTIVITY_CLASS_NAMES) return
+            if (activity.javaClass.name !in GAME_AD_ACTIVITY_CLASS_NAMES) return@after
             handleGameAdActivity(activity, "global lifecycle fallback")
         }
-    })
+    }
 }
 
 fun hookGameAdActivityLaunchFallbacks() {
@@ -1517,19 +1503,18 @@ fun hookGameAdActivityLaunchFallbacks() {
             m.parameterTypes.any { it == Intent::class.java }
         }.forEach { m -> m.isAccessible = true; methods.putIfAbsent("${m.declaringClass.name}.${m.name}(${m.parameterTypes.joinToString(",") { it.name }})", m) }
     }
-    var hooked = 0
     methods.values.forEach { m ->
         runCatching {
-            XposedBridge.hookMethod(m, object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    val intent = param.args.firstOrNull { it is Intent } as? Intent ?: return
-                    val target = intent.component?.className ?: return
-                    if (target !in GAME_AD_ACTIVITY_CLASS_NAMES) return
-                    if (!shouldBlockGameAdActivityLaunch(target)) return
+            m.hookMethod {
+                before { param ->
+                    val intent = param.args.firstOrNull { it is Intent } as? Intent ?: return@before
+                    val target = intent.component?.className ?: return@before
+                    if (target !in GAME_AD_ACTIVITY_CLASS_NAMES) return@before
+                    if (!shouldBlockGameAdActivityLaunch(target)) return@before
                     completeRecentGameAdRequests("launch fallback $target")
                     param.result = if (m.returnType == Boolean::class.javaPrimitiveType) false else null
                 }
-            }); hooked++
+            }
         }
     }
 }
@@ -1538,17 +1523,16 @@ fun hookGameAdActivityLaunchFallbacks() {
  *  methods to catch native ad views and text-marker-based ad cards. */
 fun hookGlobalGameAdSurfaceFallbacks() {
     if (!gameAdSurfaceHooksInstalled.compareAndSet(0, 1)) return
-    var hooked = 0
 
     (ViewGroup::class.java.declaredMethods + ViewGroup::class.java.methods)
         .filter { m -> m.name == "addView" && m.parameterTypes.any { it == View::class.java } }
         .distinctBy { m -> m.name + m.parameterTypes.joinToString { it.name } }
         .forEach { m ->
             m.isAccessible = true
-            XposedBridge.hookMethod(m, object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
+            m.hookMethod {
+                after { param ->
                     val parent = param.thisObject as? ViewGroup
-                    val child = param.args.firstOrNull { it is View } as? View ?: return
+                    val child = param.args.firstOrNull { it is View } as? View ?: return@after
                     when {
                         isPotentialNativeGameAdView(child) -> {
                             hideLikelyAdContainer(child, "native ad view add ${child.javaClass.name}")
@@ -1572,7 +1556,7 @@ fun hookGlobalGameAdSurfaceFallbacks() {
                         child is WebView -> injectGameAdHidingScript(child)
                     }
                 }
-            }); hooked++
+            }
         }
 
     (TextView::class.java.declaredMethods + TextView::class.java.methods)
@@ -1580,21 +1564,21 @@ fun hookGlobalGameAdSurfaceFallbacks() {
         .distinctBy { m -> m.name + m.parameterTypes.joinToString { it.name } }
         .forEach { m ->
             m.isAccessible = true
-            XposedBridge.hookMethod(m, object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    val tv = param.thisObject as? TextView ?: return
+            m.hookMethod {
+                after { param ->
+                    val tv = param.thisObject as? TextView ?: return@after
                     if (isExplicitFeedAdMarkerText(tv.text)) {
                         hideLikelyAdContainer(tv, "explicit feed ad text")
-                        return
+                        return@after
                     }
-                    if (!ENABLE_FEED_UI_MARKER_FALLBACKS) return
+                    if (!ENABLE_FEED_UI_MARKER_FALLBACKS) return@after
                     if (isAnyAdMarkerText(tv.text)) {
                         hideLikelyAdContainer(tv, "ad marker text")
                     } else if (isFeedReelCtaAdMarkerText(tv.text)) {
                         hideLikelyFeedReelCtaAdContainer(tv, "feed reel CTA text")
                     }
                 }
-            }); hooked++
+            }
         }
 
     (View::class.java.declaredMethods + View::class.java.methods)
@@ -1602,21 +1586,21 @@ fun hookGlobalGameAdSurfaceFallbacks() {
         .distinctBy { m -> m.name + m.parameterTypes.joinToString { it.name } }
         .forEach { m ->
             m.isAccessible = true
-            XposedBridge.hookMethod(m, object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    val v = param.thisObject as? View ?: return
+            m.hookMethod {
+                after { param ->
+                    val v = param.thisObject as? View ?: return@after
                     if (isExplicitFeedAdMarkerText(v.contentDescription)) {
                         hideLikelyAdContainer(v, "explicit feed ad content description")
-                        return
+                        return@after
                     }
-                    if (!ENABLE_FEED_UI_MARKER_FALLBACKS) return
+                    if (!ENABLE_FEED_UI_MARKER_FALLBACKS) return@after
                     if (isFeedAdMarkerText(v.contentDescription)) {
                         hideLikelyAdContainer(v, "feed ad content description")
                     } else if (isFeedReelCtaAdMarkerText(v.contentDescription)) {
                         hideLikelyFeedReelCtaAdContainer(v, "feed reel CTA content description")
                     }
                 }
-            }); hooked++
+            }
         }
 
     (WebView::class.java.declaredMethods + WebView::class.java.methods)
@@ -1624,13 +1608,13 @@ fun hookGlobalGameAdSurfaceFallbacks() {
         .distinctBy { m -> m.name + m.parameterTypes.joinToString { it.name } }
         .forEach { m ->
             m.isAccessible = true
-            XposedBridge.hookMethod(m, object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    val wv = param.thisObject as? WebView ?: return
+            m.hookMethod {
+                after { param ->
+                    val wv = param.thisObject as? WebView ?: return@after
                     injectGameAdHidingScript(wv)
                     scheduleGameAdSurfaceSweep(wv, "webview ${m.name}")
                 }
-            }); hooked++
+            }
         }
 
 }
@@ -1638,18 +1622,18 @@ fun hookGlobalGameAdSurfaceFallbacks() {
 /**
  * Hook Audience Network reward classes to fire completion callbacks.
  *
- * KHÁC upstream (tối ưu pin): upstream hook ClassLoader.loadClass VĨNH VIỄN, nên
- * afterHookedMethod chạy trên MỌI lần load class suốt vòng đời app. Reward class chỉ
- * load một lần (khi có reward ad) rồi được cache, nên việc theo dõi loadClass mãi là
- * lãng phí. Ở đây:
- *   1. Thử load + hook trực tiếp 6 reward class trước (thường đã nằm sẵn trong dex
- *      com.facebook.ads). Nếu cả 2 CORE class (RewardedVideoAd / RewardedInterstitialAd
- *      — nơi chứa show()) đã hook được thì KHÔNG cài loadClass hook chút nào.
- *   2. Nếu còn thiếu (reward class ở split-APK chưa load), mới cài loadClass hook —
- *      nhưng nó TỰ GỠ chính mình ngay khi cả 2 core class đã bị hook (tức khi người
- *      dùng thật sự vào reward ad lần đầu). Sau đó loadClass trở lại 0 overhead.
- * Kết quả chức năng giống hệt upstream, chỉ khác là loadClass hook sống ngắn thay vì
- * mãi mãi.
+ * Differs from upstream (battery): upstream hooks ClassLoader.loadClass FOREVER, so its
+ * afterHookedMethod runs on EVERY class load for the lifetime of the app. The reward classes
+ * are loaded once (when a reward ad appears) and then cached, so watching loadClass forever
+ * is waste. Here:
+ *   1. The six reward classes are loaded and hooked directly first (they usually already sit
+ *      in the com.facebook.ads dex). If both CORE classes (RewardedVideoAd /
+ *      RewardedInterstitialAd — where show() lives) are hooked, no loadClass hook is installed.
+ *   2. Only when one is missing (a reward class in a split that is not loaded yet) is the
+ *      loadClass hook installed — and it REMOVES itself as soon as both core classes are
+ *      hooked (the first time the user actually opens a reward ad). loadClass is back to zero
+ *      overhead afterwards.
+ * Functionally identical to upstream; the loadClass hook is just short-lived.
  */
 private val AUDIENCE_NETWORK_CORE_REWARD_CLASSES = setOf(
     "com.facebook.ads.RewardedVideoAd",
@@ -1668,10 +1652,10 @@ fun hookAudienceNetworkRewardFallbacks(classLoader: ClassLoader) {
         "com.facebook.ads.RewardedInterstitialAd\$RewardedInterstitialAdLoadConfigBuilder"
     ).forEach { cn -> runCatching { tryHookAudienceNetworkRewardClass(classLoader.loadClass(cn)) } }
 
-    // Cả 2 core class đã hook trực tiếp → không cần theo dõi loadClass nữa.
+    // Both core classes hooked directly: no need to watch loadClass.
     if (audienceNetworkRewardClassesHooked.containsAll(AUDIENCE_NETWORK_CORE_REWARD_CLASSES)) return
 
-    // Còn thiếu core class → cài loadClass hook TẠM THỜI, tự gỡ khi đủ.
+    // A core class is missing: install a TEMPORARY loadClass hook that removes itself when done.
     val loadClassUnhooks = Collections.synchronizedList(ArrayList<XC_MethodHook.Unhook>())
     (ClassLoader::class.java.declaredMethods + ClassLoader::class.java.methods)
         .filter { m -> m.name == "loadClass" && m.parameterTypes.isNotEmpty() && m.parameterTypes[0] == String::class.java }
@@ -1682,7 +1666,7 @@ fun hookAudienceNetworkRewardFallbacks(classLoader: ClassLoader) {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val clazz = param.result as? Class<*> ?: return
                     if (isAudienceNetworkRewardRelevantClass(clazz.name)) tryHookAudienceNetworkRewardClass(clazz)
-                    // Đã hook đủ 2 core class → gỡ toàn bộ loadClass hook, trả pin lại.
+                    // Both core classes hooked: remove every loadClass hook.
                     if (audienceNetworkRewardClassesHooked.containsAll(AUDIENCE_NETWORK_CORE_REWARD_CLASSES)) {
                         synchronized(loadClassUnhooks) {
                             loadClassUnhooks.forEach { u -> runCatching { u.unhook() } }
@@ -1698,44 +1682,43 @@ fun hookAudienceNetworkRewardFallbacks(classLoader: ClassLoader) {
 private fun tryHookAudienceNetworkRewardClass(clazz: Class<*>) {
     val className = clazz.name
     if (!isAudienceNetworkRewardRelevantClass(className) || !audienceNetworkRewardClassesHooked.add(className)) return
-    var hooked = 0
     val methods = runCatching { clazz.declaredMethods + clazz.methods }.getOrDefault(emptyArray())
     methods.distinctBy { m -> m.name + m.parameterTypes.joinToString(prefix = "(", postfix = ")") { it.name } }
         .forEach { m ->
             runCatching {
                 m.isAccessible = true
                 if (isAudienceNetworkRewardShowMethod(clazz, m)) {
-                    XposedBridge.hookMethod(m, object : XC_MethodHook() {
-                        override fun beforeHookedMethod(param: MethodHookParam) {
-                            val adObject = param.thisObject ?: return
-                            if (!completeAudienceNetworkRewardObject(adObject, "show ${clazz.name}.${m.name}")) return
+                    m.hookMethod {
+                        before { param ->
+                            val adObject = param.thisObject ?: return@before
+                            if (!completeAudienceNetworkRewardObject(adObject, "show ${clazz.name}.${m.name}")) return@before
                             param.result = when (m.returnType) {
                                 Boolean::class.javaPrimitiveType, Boolean::class.java -> true
                                 else -> null
                             }
                         }
-                    }); hooked++
+                    }
                 } else if (isAudienceNetworkRewardListenerRegistrationMethod(m)) {
-                    XposedBridge.hookMethod(m, object : XC_MethodHook() {
-                        override fun beforeHookedMethod(param: MethodHookParam) { rememberAudienceNetworkRewardListeners(param.thisObject, param.args, m) }
-                        override fun afterHookedMethod(param: MethodHookParam) {
+                    m.hookMethod {
+                        before { param -> rememberAudienceNetworkRewardListeners(param.thisObject, param.args, m) }
+                        after { param ->
                             rememberAudienceNetworkRewardListeners(param.thisObject, param.args, m)
                             rememberAudienceNetworkRewardListeners(param.result, param.args, m)
                         }
-                    }); hooked++
+                    }
                 } else if (isAudienceNetworkRewardLoadMethod(clazz, m)) {
-                    XposedBridge.hookMethod(m, object : XC_MethodHook() {
-                        override fun beforeHookedMethod(param: MethodHookParam) { rememberAudienceNetworkRewardListeners(param.thisObject, param.args, m) }
-                    }); hooked++
+                    m.hookMethod {
+                        before { param -> rememberAudienceNetworkRewardListeners(param.thisObject, param.args, m) }
+                    }
                 }
-            }.onFailure {  }
+            }
         }
 }
 
 private fun isAudienceNetworkRewardLoadMethod(clazz: Class<*>, method: Method) =
     clazz.name.lowercase().contains("reward") &&
     method.name.lowercase().contains("load") &&
-    !Modifier.isStatic(method.modifiers) &&
+    !method.isStatic &&
     method.parameterCount >= 1
 
 // ─── Game ad payload helpers ──────────────────────────────────────────────────
@@ -1951,7 +1934,7 @@ private fun finishGameAdActivity(activity: Activity, source: String) {
 private fun forceAudienceNetworkRewardCompletion(activity: Activity, source: String) {
     if (activity.javaClass.name !in GAME_AD_ACTIVITY_CLASS_NAMES) return
     val seen = IdentityHashMap<Any, Boolean>()
-    val queue = java.util.ArrayDeque<Pair<Any, Int>>()
+    val queue = ArrayDeque<Pair<Any, Int>>()
     queue.add(activity to 0)
     var inspected = 0; var invoked = 0
     while (!queue.isEmpty() && inspected < 96) {
@@ -1979,7 +1962,7 @@ private fun forceAudienceNetworkRewardCompletion(activity: Activity, source: Str
 private fun invokeAudienceNetworkRewardCompletionMethods(target: Any): Int {
     var invoked = 0
     audienceNetworkMethodsFor(target.javaClass).filter { m ->
-        !Modifier.isStatic(m.modifiers) && m.parameterCount == 0 &&
+        !m.isStatic && m.parameterCount == 0 &&
         (m.name in AUDIENCE_NETWORK_REWARD_COMPLETION_METHOD_NAMES || (m.name.contains("Reward", ignoreCase = true) && m.name.contains("Complete", ignoreCase = true)))
     }.forEach { m -> runCatching { m.invoke(target); invoked++ } }
     return invoked
@@ -2008,7 +1991,6 @@ private fun invokeAudienceNetworkRewardListenerCallbacks(listener: Any, adObject
             .forEach { m ->
                 val args = audienceNetworkCallbackArgs(m, adObject) ?: return@forEach
                 runCatching { m.invoke(listener, *args); invoked++ }
-                    .onFailure {  }
             }
     }
     return invoked
@@ -2027,7 +2009,7 @@ private fun audienceNetworkRewardMethodsFor(type: Class<*>): List<Method> {
     var cur: Class<*>? = type
     while (cur != null && cur != Any::class.java && cur != Activity::class.java) {
         (cur.declaredMethods + cur.methods).forEach { m ->
-            if (!Modifier.isStatic(m.modifiers)) {
+            if (!m.isStatic) {
                 m.isAccessible = true
                 map.putIfAbsent("${m.name}/${m.parameterTypes.joinToString { it.name }}", m)
             }
@@ -2040,7 +2022,7 @@ private fun audienceNetworkRewardMethodsFor(type: Class<*>): List<Method> {
 private fun findAudienceNetworkRewardListeners(root: Any?): List<Any> {
     if (root == null) return emptyList()
     val listeners = LinkedHashSet<Any>(); val seen = IdentityHashMap<Any, Boolean>()
-    val queue = java.util.ArrayDeque<Pair<Any, Int>>(); queue.add(root to 0)
+    val queue = ArrayDeque<Pair<Any, Int>>(); queue.add(root to 0)
     var inspected = 0
     while (!queue.isEmpty() && inspected < 96 && listeners.size < 8) {
         val (value, depth) = queue.removeFirst()
@@ -2106,14 +2088,14 @@ private fun isAudienceNetworkRewardRelevantClass(className: String): Boolean {
 private fun isAudienceNetworkRewardShowMethod(clazz: Class<*>, method: Method) =
     clazz.name.lowercase().contains("reward") &&
     method.name == "show" &&
-    !Modifier.isStatic(method.modifiers) &&
+    !method.isStatic &&
     method.parameterCount <= 1 &&
     (method.returnType == Void.TYPE ||
      method.returnType == Boolean::class.javaPrimitiveType ||
      method.returnType == Boolean::class.java)
 
 private fun isAudienceNetworkRewardListenerRegistrationMethod(method: Method): Boolean {
-    if (Modifier.isStatic(method.modifiers) || method.parameterCount == 0) return false
+    if (method.isStatic || method.parameterCount == 0) return false
     if (method.name.lowercase().contains("listener")) return true
     return method.parameterTypes.any { t -> t.name.lowercase().contains("listener") && (t.name.lowercase().contains("reward") || t.name.lowercase().contains("ad")) }
 }
@@ -2135,14 +2117,14 @@ private fun shouldTraverseAudienceNetworkObject(value: Any, isRootActivity: Bool
 private fun audienceNetworkFieldsFor(type: Class<*>): List<Field> {
     val list = ArrayList<Field>(); var cur: Class<*>? = type
     while (cur != null && cur != Any::class.java && cur != Activity::class.java && list.size < 48) {
-        cur.declaredFields.forEach { f -> if (!Modifier.isStatic(f.modifiers) && list.size < 48) { f.isAccessible = true; list.add(f) } }; cur = cur.superclass
+        cur.declaredFields.forEach { f -> if (!f.isStatic && list.size < 48) { f.isAccessible = true; list.add(f) } }; cur = cur.superclass
     }; return list
 }
 
 private fun audienceNetworkMethodsFor(type: Class<*>): List<Method> {
     val map = LinkedHashMap<String, Method>(); var cur: Class<*>? = type
     while (cur != null && cur != Any::class.java && cur != Activity::class.java) {
-        cur.declaredMethods.forEach { m -> if (!Modifier.isStatic(m.modifiers)) { m.isAccessible = true; map.putIfAbsent("${cur.name}.${m.name}/${m.parameterCount}", m) } }; cur = cur.superclass
+        cur.declaredMethods.forEach { m -> if (!m.isStatic) { m.isAccessible = true; map.putIfAbsent("${cur.name}.${m.name}/${m.parameterCount}", m) } }; cur = cur.superclass
     }; return map.values.toList()
 }
 
@@ -2406,7 +2388,7 @@ private fun isLikelyExplicitFeedAdCardContainer(view: View, rootWidth: Int, root
  *  strong CTA phrase ("Learn More", "Shop Now"...) — this combination is what makes
  *  the explicit detector safe to leave always-on (low false positive rate). */
 private fun collectExplicitFeedAdCardSignals(root: View): ExplicitFeedAdCardSignals {
-    val queue = java.util.ArrayDeque<View>(); queue.add(root)
+    val queue = ArrayDeque<View>(); queue.add(root)
     var visited = 0
     var hasHideAd = false; var hasAdLabel = false; var hasSharedLink = false; var hasStrongCta = false
     while (queue.isNotEmpty() && visited < 192 && !(hasHideAd && (hasAdLabel || hasSharedLink || hasStrongCta))) {
@@ -2453,7 +2435,7 @@ private fun isLikelyFeedReelCtaAdContainer(view: View, rootWidth: Int, rootHeigh
 }
 
 private fun collectFeedReelCtaAdSignals(root: View): FeedReelCtaAdSignals {
-    val queue = java.util.ArrayDeque<View>(); queue.add(root)
+    val queue = ArrayDeque<View>(); queue.add(root)
     var visited = 0
     var hasSharedLink = false; var hasSendMessageCta = false; var hasReelSurface = false; var hasLeadGenPrompt = false
     while (queue.isNotEmpty() && visited < 128 &&
@@ -2561,7 +2543,7 @@ private fun isGameAdMarkerText(value: CharSequence?): Boolean {
 private fun resolveGameAdResolveMethod(type: Class<*>?): Method? {
     if (type == null) return null
     val candidates = (type.declaredMethods + type.methods).filter { m ->
-        !Modifier.isStatic(m.modifiers) && m.returnType == Void.TYPE && m.parameterCount == 2 &&
+        !m.isStatic && m.returnType == Void.TYPE && m.parameterCount == 2 &&
         m.parameterTypes[0] == String::class.java && !m.parameterTypes[1].isPrimitive
     }
     return (candidates.firstOrNull { it.parameterTypes[1] == Any::class.java }
@@ -2572,7 +2554,7 @@ private fun resolveGameAdResolveMethod(type: Class<*>?): Method? {
 private fun resolveGameAdBridgeRejectMethod(type: Class<*>?): Method? {
     if (type == null) return null
     return (type.declaredMethods + type.methods).firstOrNull { m ->
-        !Modifier.isStatic(m.modifiers) && m.returnType == Void.TYPE && m.parameterCount == 3 &&
+        !m.isStatic && m.returnType == Void.TYPE && m.parameterCount == 3 &&
         m.parameterTypes[0] == String::class.java && m.parameterTypes[1] == String::class.java && m.parameterTypes[2] == JSONObject::class.java
     }?.apply { isAccessible = true }
 }
@@ -2580,7 +2562,7 @@ private fun resolveGameAdBridgeRejectMethod(type: Class<*>?): Method? {
 private fun resolveGameAdRejectMethod(type: Class<*>?): Method? {
     if (type == null) return null
     return (type.declaredMethods + type.methods).firstOrNull { m ->
-        !Modifier.isStatic(m.modifiers) && m.returnType == Void.TYPE && m.parameterCount == 3 && m.parameterTypes.all { it == String::class.java }
+        !m.isStatic && m.returnType == Void.TYPE && m.parameterCount == 3 && m.parameterTypes.all { it == String::class.java }
     }?.apply { isAccessible = true }
 }
 
@@ -2594,19 +2576,19 @@ private fun dispatchGameEvent(target: Any?, eventType: String, content: Any?): B
 private fun resolveGameEventDispatchMethod(type: Class<*>?): Method? {
     if (type == null) return null
     return (type.declaredMethods + type.methods).firstOrNull { m ->
-        !Modifier.isStatic(m.modifiers) && m.returnType == Void.TYPE && m.parameterCount == 2 &&
+        !m.isStatic && m.returnType == Void.TYPE && m.parameterCount == 2 &&
         m.parameterTypes[0] != String::class.java && m.parameterTypes[1] == Any::class.java
     }?.apply { isAccessible = true }
 }
 
 private fun resolveGameEventValue(eventType: Class<*>, eventName: String): Any? {
     val valuesMethod = (eventType.declaredMethods + eventType.methods).firstOrNull { m ->
-        Modifier.isStatic(m.modifiers) && m.parameterCount == 0 && m.returnType.isArray && m.returnType.componentType == eventType
+        m.isStatic && m.parameterCount == 0 && m.returnType.isArray && m.returnType.componentType == eventType
     }?.apply { isAccessible = true }
     val values = runCatching { valuesMethod?.invoke(null) as? Array<*> }.getOrNull().orEmpty()
     values.firstOrNull { it?.toString() == eventName }?.let { return it }
     return eventType.declaredFields.firstOrNull { f ->
-        Modifier.isStatic(f.modifiers) && f.type == eventType &&
+        f.isStatic && f.type == eventType &&
         runCatching { f.isAccessible = true; f.get(null)?.toString() == eventName }.getOrDefault(false)
     }?.let { f -> runCatching { f.get(null) }.getOrNull() }
 }
@@ -2676,9 +2658,9 @@ fun replaceFeedItemsInResult(param: XC_MethodHook.MethodHookParam, items: List<A
 private fun rebuildFeedResult(result: Any, items: List<Any?>): Any? {
     val type = result.javaClass
     val fields = runCatching { type.declaredFields.onEach { it.isAccessible = true } }.getOrNull() ?: return null
-    val listField    = fields.firstOrNull { !Modifier.isStatic(it.modifiers) && Iterable::class.java.isAssignableFrom(it.type) } ?: return null
-    val intArrayField = fields.firstOrNull { !Modifier.isStatic(it.modifiers) && it.type == IntArray::class.java } ?: return null
-    val intFields    = fields.filter { !Modifier.isStatic(it.modifiers) && it.type == Int::class.javaPrimitiveType }
+    val listField    = fields.firstOrNull { !it.isStatic && Iterable::class.java.isAssignableFrom(it.type) } ?: return null
+    val intArrayField = fields.firstOrNull { !it.isStatic && it.type == IntArray::class.java } ?: return null
+    val intFields    = fields.filter { !it.isStatic && it.type == Int::class.javaPrimitiveType }
     if (intFields.size < 3) return null
     val originalList = runCatching { listField.get(result) }.getOrNull()
     val rebuiltList  = buildImmutableListLike(originalList, items) ?: return null
@@ -2721,7 +2703,7 @@ fun buildSponsoredEmptyResult(type: Class<*>): Any? {
 
 fun resolveLithoRenderMethod(componentClass: Class<*>): Method? =
     componentClass.declaredMethods.firstOrNull { m ->
-        !Modifier.isStatic(m.modifiers) && !m.isBridge && !m.isSynthetic && m.parameterCount == 1 &&
+        !m.isStatic && !m.isBridge && !m.isSynthetic && m.parameterCount == 1 &&
         !m.returnType.isPrimitive && m.returnType != Void.TYPE && m.returnType != Any::class.java &&
         m.returnType.isAssignableFrom(componentClass)
     }?.apply { isAccessible = true }
@@ -2738,7 +2720,7 @@ fun resolveLithoRenderMethod(componentClass: Class<*>): Method? =
 fun resolveInstreamBannerEligibilityMethod(candidateClass: Class<*>): Method? {
     (candidateClass.declaredMethods + candidateClass.methods)
         .firstOrNull { m ->
-            !Modifier.isStatic(m.modifiers) &&
+            !m.isStatic &&
             m.returnType == Boolean::class.javaPrimitiveType &&
             m.parameterCount == 0
         }
@@ -2748,7 +2730,7 @@ fun resolveInstreamBannerEligibilityMethod(candidateClass: Class<*>): Method? {
     var current: Class<*>? = candidateClass.superclass
     while (current != null && current != Any::class.java) {
         current.declaredMethods.firstOrNull { m ->
-            !Modifier.isStatic(m.modifiers) &&
+            !m.isStatic &&
             m.returnType == Boolean::class.javaPrimitiveType &&
             m.parameterCount == 0
         }?.let { it.isAccessible = true; return it }
@@ -2800,13 +2782,13 @@ fun hookFeedCollectionAddEdge(method: Method, inspector: FeedItemInspector) {
     val edgeIndex = method.parameterTypes.indexOfFirst { it.name == GRAPHQL_FEED_UNIT_EDGE_CLASS }
         .let { if (it >= 0) it else 1 }
     if (!feedCollectionMethodsHooked.add(methodHookKey(method))) return
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) {
-            val edge = param.args.getOrNull(edgeIndex) ?: return
-            if (!inspector.isExplicitlySponsoredFeedEdge(edge)) return
+    method.hookMethod {
+        before { param ->
+            val edge = param.args.getOrNull(edgeIndex) ?: return@before
+            if (!inspector.isExplicitlySponsoredFeedEdge(edge)) return@before
             param.result = false
         }
-    })
+    }
 }
 
 // ─── Search results (SERP) ads ────────────────────────────────────────────────
@@ -2875,7 +2857,7 @@ class SearchResultUnitInspector(private val unitTypeEnumClass: Class<*>) {
         var current: Class<*>? = type
         while (current != null && current != Any::class.java) {
             current.declaredFields.firstOrNull { field ->
-                !Modifier.isStatic(field.modifiers) && field.type == unitTypeEnumClass
+                !field.isStatic && field.type == unitTypeEnumClass
             }?.let { return it.apply { isAccessible = true } }
             current = current.superclass
         }
@@ -2898,18 +2880,18 @@ class SearchResultUnitInspector(private val unitTypeEnumClass: Class<*>) {
  */
 fun hookSearchResultUnitList(method: Method, inspector: SearchResultUnitInspector) {
     if (!searchAdMethodsHooked.add(methodHookKey(method))) return
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun afterHookedMethod(param: MethodHookParam) {
-            val units = param.result as? Iterable<*> ?: return
+    method.hookMethod {
+        after { param ->
+            val units = param.result as? Iterable<*> ?: return@after
             val kept = ArrayList<Any?>()
             var removed = 0
             for (unit in units) {
                 if (runCatching { inspector.isAdUnit(unit) }.getOrDefault(false)) removed++ else kept.add(unit)
             }
-            if (removed == 0) return
+            if (removed == 0) return@after
             buildImmutableListLike(param.result, kept)?.let { param.result = it }
         }
-    })
+    }
 }
 
 /**
@@ -2926,15 +2908,15 @@ fun hookSearchResultUnitList(method: Method, inspector: SearchResultUnitInspecto
  * perfectly ordinary "loaded, nothing in it" transition and every field it depends on is
  * still set.
  */
-fun hookSearchAdsLoadedState(constructor: java.lang.reflect.Member) {
+fun hookSearchAdsLoadedState(constructor: Member) {
     if (!searchAdMethodsHooked.add("${constructor.declaringClass.name}#<init>")) return
-    XposedBridge.hookMethod(constructor, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) {
-            val current = param.args.getOrNull(0) as? Iterable<*> ?: return
-            if (!current.iterator().hasNext()) return
+    constructor.hookMethod {
+        before { param ->
+            val current = param.args.getOrNull(0) as? Iterable<*> ?: return@before
+            if (!current.iterator().hasNext()) return@before
             buildImmutableListLike(current, emptyList())?.let { param.args[0] = it }
         }
-    })
+    }
 }
 
 /**
@@ -2948,9 +2930,9 @@ fun hookSearchAdsLoadedState(constructor: java.lang.reflect.Member) {
  */
 fun hookSearchAdComponentRender(method: Method) {
     if (!searchAdMethodsHooked.add(methodHookKey(method))) return
-    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) {
+    method.hookMethod {
+        before { param ->
             param.result = null
         }
-    })
+    }
 }

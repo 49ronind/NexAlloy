@@ -1,9 +1,9 @@
 package io.github.nexalloy.morphe.google.discover
 
 import app.morphe.extension.shared.Logger
+import io.github.nexalloy.isStatic
 import io.github.nexalloy.patch
 import java.lang.reflect.Field
-import java.lang.reflect.Modifier
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
@@ -25,11 +25,7 @@ val FilterDiscoverAds = patch(
             var removed = 0
             val filtered = ArrayList<Any?>(items.size)
             for (item in items) {
-                if (item == null) {
-                    filtered += null
-                    continue
-                }
-                val key = DiscoverAdFilter.stableItemKey(item)
+                val key = item?.let(DiscoverAdFilter::stableItemKey)
                 if (key != null && DiscoverAdFilter.isAdItem(key)) {
                     removed++
                     Logger.printDebug { "Discover: blocked ad key=$key" }
@@ -52,50 +48,42 @@ val FilterDiscoverAds = patch(
 }
 
 /**
- * Stateless-ish helper that holds the filter runtime caches.
- *
- * All maps use ConcurrentHashMap so they are safe if the stream method is ever
- * called from multiple threads (original repo used the same approach).
+ * Runtime caches of the Discover filter. The stream method can be called from several threads,
+ * so every cache is concurrent.
  */
 internal object DiscoverAdFilter {
-    // The obfuscated field name that carries a stable content-ID string.
-    // Survives across AGSA versions because it is a proto-wire field accessor.
-    private const val CONTENT_ID_FIELD = "f122746b"
-
-    // Ad-slot cluster tokens found in Discover content IDs.
+    /** Ad-slot cluster tokens found in Discover content ids. */
     private val adClusterTokens = setOf("feedads")
 
-    // --- caches (mirrors of StreamSliceFilterHook) ---
     private val decisionCache = ConcurrentHashMap<String, Boolean>()
-    private val contentIdFieldCache = ConcurrentHashMap<Class<*>, Field>()
-    private val noContentIdClasses = ConcurrentHashMap.newKeySet<Class<*>>()
-    private val stringFieldsCache = ConcurrentHashMap<Class<*>, List<Field>>()
+    private val instanceFieldsCache = ConcurrentHashMap<Class<*>, List<Field>>()
     private val nonSliceClasses = ConcurrentHashMap.newKeySet<Class<*>>()
 
-    @Volatile var lastFingerprint: Long = Long.MIN_VALUE
-    @Volatile var lastFilteredSnapshot: List<Any?>? = null
+    @Volatile
+    var lastFingerprint: Long = Long.MIN_VALUE
 
-    // ------------------------------------------------------------------ public API
+    @Volatile
+    var lastFilteredSnapshot: List<Any?>? = null
 
-    fun isAdItem(key: String): Boolean {
-        decisionCache[key]?.let { return it }
+    fun isAdItem(key: String): Boolean = decisionCache.getOrPut(key) {
         val lower = key.lowercase(Locale.ROOT)
-        val isAd = adClusterTokens.any { it in lower }
-        decisionCache[key] = isAd
-        return isAd
+        adClusterTokens.any { it in lower }
     }
 
+    /**
+     * `SimpleClassName#<first non-blank String value>` of an item, or null when it has none. A
+     * class is remembered as "not a content slice" the first time one of its items yields no
+     * key, and all its later items are skipped.
+     *
+     * The content id sits in an obfuscated field whose name changes between AGSA builds, so the
+     * item is not read by field name: the first non-blank String instance value wins.
+     */
     fun stableItemKey(item: Any): String? {
         val cls = item.javaClass
         if (cls in nonSliceClasses) return null
 
-        // Fast path: look up the known stable content-ID field.
-        contentId(item, cls)?.let { return it }
-
-        // Fallback: first non-blank String field (mirrors original repo).
-        val fields = stringFieldsCache.getOrPut(cls) { resolveStringFields(cls) }
-        for (f in fields) {
-            val value = try { f.get(item) as? String } catch (_: Exception) { null }
+        for (f in instanceFieldsCache.getOrPut(cls) { instanceFieldsOf(cls) }) {
+            val value = runCatching { f.get(item) as? String }.getOrNull()
             if (!value.isNullOrBlank()) return "${cls.simpleName}#$value"
         }
 
@@ -104,8 +92,8 @@ internal object DiscoverAdFilter {
     }
 
     /**
-     * Fast identity-based fingerprint of the list so we can skip re-filtering
-     * when the exact same list object is returned again (common in re-draws).
+     * Identity based fingerprint of up to four sampled elements, so the exact same list returned
+     * again on a redraw is not filtered twice.
      */
     fun fastFingerprint(items: List<*>): Long {
         var hash = items.size.toLong()
@@ -120,45 +108,11 @@ internal object DiscoverAdFilter {
         return hash
     }
 
-    // ------------------------------------------------------------------ private helpers
-
-    private fun contentId(item: Any, cls: Class<*>): String? {
-        if (cls in noContentIdClasses) return null
-        val field = contentIdFieldCache[cls] ?: run {
-            val found = findFieldInHierarchy(cls, CONTENT_ID_FIELD)
-            if (found == null) {
-                noContentIdClasses.add(cls)
-                return null
-            }
-            contentIdFieldCache[cls] = found
-            found
-        }
-        return try { field.get(item) as? String } catch (_: Exception) { null }
-            ?.takeIf { it.isNotBlank() }
-    }
-
-    private fun findFieldInHierarchy(start: Class<*>, name: String): Field? {
-        var c: Class<*>? = start
-        while (c != null && c != Any::class.java) {
-            try {
-                return c.getDeclaredField(name).also { it.isAccessible = true }
-            } catch (_: NoSuchFieldException) {
-                // walk up the hierarchy
-            }
-            c = c.superclass
-        }
-        return null
-    }
-
-    private fun resolveStringFields(cls: Class<*>): List<Field> = buildList {
-        var c: Class<*>? = cls
-        while (c != null && c != Any::class.java) {
-            for (f in c.declaredFields) {
-                if (Modifier.isStatic(f.modifiers) || f.isSynthetic) continue
-                try { f.isAccessible = true } catch (_: Exception) { continue }
-                add(f)
-            }
-            c = c.superclass
-        }
-    }
+    private fun instanceFieldsOf(cls: Class<*>): List<Field> =
+        generateSequence(cls) { it.superclass }
+            .takeWhile { it != Any::class.java }
+            .flatMap { it.declaredFields.asSequence() }
+            .filter { !it.isStatic && !it.isSynthetic }
+            .filter { runCatching { it.isAccessible = true }.isSuccess }
+            .toList()
 }

@@ -4,6 +4,7 @@ import app.morphe.extension.shared.Logger
 import io.github.nexalloy.patch
 import java.lang.reflect.Field
 import java.lang.reflect.Method
+import java.util.concurrent.ConcurrentHashMap
 
 internal var hideAdsEnabled = false
 internal var hideRevisitPinnedPostsEnabled = false
@@ -41,11 +42,11 @@ internal fun isEntryIdRemove(entryId: String?): Boolean {
     }
 }
 
-
+/** Logs the component and entryId of every timeline item (for finding new recommendation ids). */
 internal var logTimelineComponents = false
 
-
-internal val recommendationComponents = mutableSetOf<String>()
+/** ClientEventInfo component names to hide, matched case-insensitively as substrings. */
+internal val recommendationComponents: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
 private fun matchesComponent(component: String?): Boolean {
     if (component == null || recommendationComponents.isEmpty()) return false
@@ -53,30 +54,31 @@ private fun matchesComponent(component: String?): Boolean {
     return recommendationComponents.any { c.contains(it.lowercase()) }
 }
 
-private val promotedFieldCache = HashMap<Class<*>, Field?>()
+// The mapper runs on several background threads; a plain HashMap here could corrupt itself.
+private val NO_FIELD = Any()
+private val promotedFieldCache = ConcurrentHashMap<Class<*>, Any>()
 
 private fun promotedFieldOf(itemClass: Class<*>, promotedClass: Class<*>): Field? =
     promotedFieldCache.getOrPut(itemClass) {
         itemClass.declaredFields
             .firstOrNull { it.type == promotedClass }
             ?.apply { isAccessible = true }
-    }
+            ?: NO_FIELD
+    } as? Field
 
 private inline fun <T> resolving(what: String, block: () -> T): T =
     try {
         block()
     } catch (e: Throwable) {
-        throw Exception("TimelineEntryHook: không resolve được $what", e)
+        throw Exception("TimelineEntryHook: could not resolve $what", e)
     }
 
 val TimelineEntryHook = patch(name = "<TimelineEntryHook>") {
-
-
-    val itemInterface: Class<*> = resolving("mapper row->UrtTimelineItem (glide.f#K)") {
+    val itemInterface: Class<*> = resolving("mapper row -> UrtTimelineItem") {
         DbTimelineEntryToItemFingerprint.method.returnType
     }
 
-    val entryIdGetter: Method = resolving("getter entryId trên UrtTimelineItem") {
+    val entryIdGetter: Method = resolving("entryId getter on UrtTimelineItem") {
         itemInterface.declaredMethods.single {
             it.parameterCount == 0 && it.returnType == String::class.java
         }.apply { isAccessible = true }
@@ -90,13 +92,13 @@ val TimelineEntryHook = patch(name = "<TimelineEntryHook>") {
         val clientEventInfoClass = resolving("class ClientEventInfo") {
             ClientEventInfoToStringFingerprint.declaredClass
         }
-        val getter = resolving("getter ClientEventInfo trên UrtTimelineItem") {
+        val getter = resolving("ClientEventInfo getter on UrtTimelineItem") {
             itemInterface.declaredMethods.single {
                 it.parameterCount == 0 && it.returnType == clientEventInfoClass
             }.apply { isAccessible = true }
         }
 
-        val field = resolving("field component của ClientEventInfo") {
+        val field = resolving("component field of ClientEventInfo") {
             clientEventInfoClass.declaredFields
                 .filter { it.type == String::class.java }
                 .minByOrNull { it.name }!!
@@ -112,7 +114,6 @@ val TimelineEntryHook = patch(name = "<TimelineEntryHook>") {
     }
 
     fun shouldRemove(item: Any): Boolean {
-
         if (hideAdsEnabled && promotedFieldOf(item.javaClass, promotedClass)?.get(item) != null) {
             return true
         }

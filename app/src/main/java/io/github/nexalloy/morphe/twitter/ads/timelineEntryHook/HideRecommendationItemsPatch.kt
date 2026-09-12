@@ -9,12 +9,8 @@ val HideRecommendationItems = patch(
 ) {
     dependsOn(TimelineEntryHook)
 
-    logTimelineComponents = false
-
-    recommendationComponents.addAll(
-        listOf<String>()
-    )
-
+    // Entry-id rules only; add ClientEventInfo component names to recommendationComponents
+    // (and set logTimelineComponents to find them) when a recommendation has no stable entry id.
     hideRevisitPinnedPostsEnabled = true
     hideCommunitiesToJoinEnabled = true
     hideCreatorsToSubscribeEnabled = true
