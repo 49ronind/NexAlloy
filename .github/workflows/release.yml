@@ -135,13 +135,31 @@ jobs:
       run: |
         TAG=${{ steps.tag.outputs.tag }}
 
-        for dir in artifacts/nexalloy-ci-*-release-apk; do
+        shopt -s nullglob
+        dirs=(artifacts/nexalloy-ci-*-release-apk)
+        shopt -u nullglob
+
+        if [ ${#dirs[@]} -eq 0 ]; then
+          echo "Error: No release APK directories found matching artifacts/nexalloy-ci-*-release-apk" >&2
+          exit 1
+        fi
+
+        found=0
+        for dir in "${dirs[@]}"; do
           NAME=$(basename "$dir")
           BRANCH=$(echo "$NAME" | sed 's/nexalloy-ci-\(.*\)-release-apk/\1/')
 
-          APK=$(find "$dir" -name "app-release.apk" | head -1)
-          mv "$APK" "artifacts/NexAlloy-${BRANCH}-release-${TAG}.apk"
+          APK=$(find "$dir" -type f -name "*.apk" | head -1)
+          if [ -n "$APK" ]; then
+            mv "$APK" "artifacts/NexAlloy-${BRANCH}-release-${TAG}.apk"
+            found=$((found + 1))
+          fi
         done
+
+        if [ "$found" -eq 0 ]; then
+          echo "Error: No APK files found to rename" >&2
+          exit 1
+        fi
 
     - name: Prepare release body
       id: body
