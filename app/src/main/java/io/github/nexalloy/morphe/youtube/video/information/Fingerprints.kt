@@ -5,6 +5,7 @@ import io.github.nexalloy.morphe.Fingerprint
 import io.github.nexalloy.morphe.InstructionLocation.MatchAfterWithin
 import io.github.nexalloy.morphe.Opcode
 import io.github.nexalloy.morphe.OpcodesFilter
+import io.github.nexalloy.morphe.StringComparisonType
 import io.github.nexalloy.morphe.fieldAccess
 import io.github.nexalloy.morphe.findClassDirect
 import io.github.nexalloy.morphe.findFieldDirect
@@ -46,13 +47,15 @@ val setPlaybackSpeedMethodReference = findMethodDirect {
 
 val PlayerControllerClass = findClassDirect { setPlaybackSpeedMethodReference().declaredClass!! }
 
-val playerControllerSetTimeReferenceFingerprint = fingerprint {
-    opcodes(Opcode.INVOKE_DIRECT_RANGE, Opcode.IGET_OBJECT)
-    strings("Media progress reported outside media playback: ")
-}
+internal object PlayerControllerSetTimeReferenceFingerprint : Fingerprint(
+    filters = OpcodesFilter.opcodesToFilters(
+        Opcode.INVOKE_DIRECT_RANGE,
+        Opcode.IGET_OBJECT
+    ) + string("Media progress reported outside media playback: ", comparison = StringComparisonType.CONTAINS)
+)
 
 val timeMethod = findMethodDirect {
-    playerControllerSetTimeReferenceFingerprint().invokes.single { it.name == "<init>" }
+    PlayerControllerSetTimeReferenceFingerprint().invokes.single { it.name == "<init>" }
 }
 
 internal object PlayerInitFingerprint : Fingerprint(
@@ -241,36 +244,3 @@ val setQualityMenuIndexMethod = findMethodDirect {
         matcher { addParamType { descriptor = VideoQualityClass().descriptor } }
     }.single()
 }
-
-
-/**
- * Matches method {androidx.media3.exoplayer.ExoPlayerImpl.setPlaybackParameters(PlaybackParameters p1)}
- */
-val playbackParametersSetterFingerprint = findMethodDirect {
-    Fingerprint(
-        accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.FINAL),
-        returnType = "V",
-        parameters = listOf(PlaybackParametersToStringFingerprint().declaredClass!!.descriptor),
-        custom = {
-            declaredClass {
-                addInterface { descriptor = "Landroidx/media3/exoplayer/ExoPlayer;" }
-            }
-        }
-    )()
-}
-
-
-/**
- * Matches method {androidx.media3.common.PlaybackParameters}.toString()
- */
-internal object PlaybackParametersToStringFingerprint : Fingerprint(
-    name = "toString",
-    accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.FINAL),
-    returnType = "Ljava/lang/String;",
-    parameters = listOf(),
-    filters = listOf(
-        fieldAccess(definingClass = "this", opcode = Opcode.IGET, type = "F"),
-        string("PlaybackParameters(speed=%.2f, pitch=%.2f)")
-    )
-)
-

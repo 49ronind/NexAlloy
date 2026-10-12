@@ -154,11 +154,6 @@ class FingerprintDsl(init: FingerprintDsl.() -> Unit) {
         methodMatcherBlocks += { literal(literalSupplier) }
     }
 
-    @JvmName("classFingerprint2")
-    fun classFingerprint(findClassFunc: FindClassFunc) {
-        classFinder = findClassFunc
-    }
-
     fun classFingerprint(findMethodFunc: FindMethodFunc) {
         classFinder = { findMethodFunc().declaredClass!! }
     }
@@ -190,7 +185,7 @@ class FingerprintDsl(init: FingerprintDsl.() -> Unit) {
 
         // Apply classFinder or classMatcher
         if (classFinder != null) {
-            fp.classFinder = classFinder
+            fp.legacyClassFinder = classFinder
         }
         if (classMatcherBlock != null) {
             fp.classMatcherBlock = classMatcherBlock
@@ -210,10 +205,10 @@ class FingerprintDsl(init: FingerprintDsl.() -> Unit) {
  * This annotation forces the query results to be filtered again using instruction matching.
  * @see Fingerprint.run
  * */
-annotation class RestrictQuery
+annotation class StrictQuery
 
 open class Fingerprint internal constructor(
-    classFingerprint: Fingerprint? = null,
+    val classFingerprint: Fingerprint? = null,
     definingClass: String? = null,
     name: String? = null,
     accessFlags: List<AccessFlags>? = null,
@@ -223,14 +218,11 @@ open class Fingerprint internal constructor(
     strings: List<String>? = null,
     custom: (MethodMatcher.() -> Unit)? = null
 ) {
-    internal var classFinder: FindClassFunc? = null
+    internal var legacyClassFinder: FindClassFunc? = null
     internal var classMatcherBlock: (ClassMatcher.() -> Unit)? = null
     internal var extraMethodMatcherBlocks: List<MethodMatcher.() -> Unit>? = null
 
     init {
-        if (classFingerprint != null) {
-            classFinder = { classFingerprint.run().declaredClass!! }
-        }
         if (custom != null)
             extraMethodMatcherBlocks = listOf(custom)
     }
@@ -359,33 +351,18 @@ open class Fingerprint internal constructor(
         return run()
     }
 
+    /**
+     * Finds a unique method result using DexKit query.
+     *
+     * When strict mode is enabled and multiple candidates are found,
+     * applies instruction matching to narrow down the results.
+     */
     context(dexkit: DexKitBridge)
     fun run(): MethodData {
-        val methodMatcher = buildMethodMatcher()
+        var results: List<MethodData> = queryAll()
 
-        var results: List<MethodData> = if (classMatcherBlock != null) {
-            dexkit.findClass {
-                matcher(ClassMatcher().apply(classMatcherBlock!!))
-            }.findMethod {
-                matcher(methodMatcher)
-            }
-        } else if (classFinder != null) {
-            classFinder!!.invoke(dexkit).findMethod {
-                matcher(methodMatcher)
-            }
-        } else {
-            dexkit.findMethod {
-                matcher(methodMatcher)
-            }
-        }
-
-        if (results.size > 1) {
-            val isRestrict =
-                this::class.java.annotations.filterIsInstance<RestrictQuery>().firstOrNull()
-
-            if (isRestrict != null) {
-                results = results.filter { matchOrNull(it) != null }
-            }
+        if (results.size > 1 && isStrict) {
+            results = results.filter { matchOrNull(it) != null }
         }
 
         if (results.size != 1) {
@@ -394,6 +371,41 @@ open class Fingerprint internal constructor(
             System.err.println("$name matched ${results.size} methods:\n  $list")
         }
         return results.single()
+    }
+
+    private val isStrict = this::class.java.annotations.filterIsInstance<StrictQuery>().isNotEmpty()
+
+    context(dexkit: DexKitBridge)
+    private fun queryAll(): List<MethodData> {
+        val methodMatcher = buildMethodMatcher()
+        val results: List<MethodData> = if (classMatcherBlock != null) {
+            dexkit.findClass {
+                matcher(ClassMatcher().apply(classMatcherBlock!!))
+            }.findMethod {
+                matcher(methodMatcher)
+            }
+        } else if (classFingerprint != null) {
+            val classes = classFingerprint.queryAll().map { it.declaredClass!! }
+
+            dexkit.findMethod {
+                searchInClass(classes)
+                matcher(methodMatcher)
+            }
+        } else if (legacyClassFinder != null) {
+            legacyClassFinder!!.invoke(dexkit).findMethod {
+                matcher(methodMatcher)
+            }
+        } else {
+            dexkit.findMethod {
+                matcher(methodMatcher)
+            }
+        }
+
+        if (results.size > 10) {
+            throw IllegalStateException("Bad query, too much results")
+        }
+
+        return results
     }
 
     context(dexkit: DexKitBridge)
@@ -486,6 +498,22 @@ open class Fingerprint internal constructor(
     context(_: DexKitBridge)
     val instructionMatches
         get() = match().instructionMatches
+
+    /**
+     * Match all methods in the target app.
+     *
+     * @return All methods that match.
+     * @throws Exception If the fingerprint failed to match any methods.
+     */
+    context(patchContext: DexKitBridge)
+    fun matchAll() = matchAllOrNull() ?: throw Exception()
+
+    context(_: DexKitBridge)
+    fun matchAllOrNull(): List<Match>? {
+        return queryAll().mapNotNull { matchOrNull(it) }
+            .distinctBy(Match::method)
+            .ifEmpty { null }
+    }
 }
 
 class Match constructor(

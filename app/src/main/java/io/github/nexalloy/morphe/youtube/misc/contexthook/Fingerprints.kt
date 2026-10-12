@@ -36,9 +36,14 @@ internal object AuthenticationChangeListenerFingerprint : Fingerprint(
         )
     ),
     accessFlags = listOf(AccessFlags.PRIVATE, AccessFlags.FINAL),
+    parameters = listOf("L"),
     returnType = "V",
     filters = listOf(
-        methodCall(opcode = Opcode.INVOKE_VIRTUAL, parameters = emptyList(), returnType = "L")
+        methodCall(
+            opcode = Opcode.INVOKE_VIRTUAL,
+            returnType = "L",
+            parameters = emptyList()
+        )
     )
 )
 
@@ -106,8 +111,9 @@ val messageLiteBuilderMethodLegacy = findMethodDirect {
 @get:RequireAppVersion("21.33.000")
 val messageLiteBuilderMethod = findMethodDirect {
     val messageLiteBuilderClassName = messageLiteBuilderField().declaredClassName
-    AuthenticationChangeListenerFingerprint()
-        .invokes.single { it.returnTypeName == messageLiteBuilderClassName }
+    AuthenticationChangeListenerFingerprint.matchAll().mapNotNull {
+        it.method.invokes.singleOrNull { it.returnTypeName == messageLiteBuilderClassName }
+    }.single()
 }
 
 val osNameField = findFieldDirect {

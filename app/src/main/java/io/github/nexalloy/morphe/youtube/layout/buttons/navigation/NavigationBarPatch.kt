@@ -45,6 +45,7 @@ val NavigationBar = patch(
 //        SwitchPreference("morphe_hide_navigation_bar"),
 //        SwitchPreference("morphe_narrow_navigation_buttons", summary = true),
         SwitchPreference("morphe_hide_navigation_button_labels"),
+        SwitchPreference("morphe_hide_navigation_new_content_dot"),
         SwitchPreference("morphe_navigation_bar_animations", summary = true),
 //        SwitchPreference("morphe_disable_translucent_navigation", summary = true)
     )
@@ -106,5 +107,8 @@ val NavigationBar = patch(
         }
     }
 
+    // TODO Navigation search and settings button
+    // TODO useTranslucentNavigation
+    // TODO Disable the A/B layout with Subscriptions as a tab of Home.
     // TODO upper navigation toolbar
 }
