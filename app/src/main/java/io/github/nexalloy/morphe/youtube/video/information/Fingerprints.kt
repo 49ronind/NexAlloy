@@ -1,25 +1,110 @@
 package io.github.nexalloy.morphe.youtube.video.information
 
+import io.github.nexalloy.AllowAbstract
+import io.github.nexalloy.RequireAppVersion
+import io.github.nexalloy.SkipTest
 import io.github.nexalloy.morphe.AccessFlags
 import io.github.nexalloy.morphe.Fingerprint
+import io.github.nexalloy.morphe.InstructionLocation.MatchAfterImmediately
 import io.github.nexalloy.morphe.InstructionLocation.MatchAfterWithin
+import io.github.nexalloy.morphe.InstructionLocation.MatchFirst
 import io.github.nexalloy.morphe.Opcode
 import io.github.nexalloy.morphe.OpcodesFilter
+import io.github.nexalloy.morphe.StrictQuery
 import io.github.nexalloy.morphe.StringComparisonType
 import io.github.nexalloy.morphe.fieldAccess
 import io.github.nexalloy.morphe.findClassDirect
 import io.github.nexalloy.morphe.findFieldDirect
 import io.github.nexalloy.morphe.findMethodDirect
-import io.github.nexalloy.morphe.fingerprint
+import io.github.nexalloy.morphe.findMethodListDirect
 import io.github.nexalloy.morphe.literal
 import io.github.nexalloy.morphe.methodCall
 import io.github.nexalloy.morphe.opcode
+import io.github.nexalloy.morphe.shared.misc.videoinformation.seekSourceUnknownField
 import io.github.nexalloy.morphe.string
 import io.github.nexalloy.morphe.youtube.shared.PlaybackSpeedOnItemClickParentFingerprint
+import io.github.nexalloy.morphe.youtube.shared.VideoQualityChangedFingerprint
 import io.github.nexalloy.morphe.youtube.shared.VideoQualityClass
-import io.github.nexalloy.morphe.youtube.shared.videoQualityChangedFingerprint
 import org.luckypray.dexkit.query.enums.OpCodeMatchType
 import org.luckypray.dexkit.result.FieldUsingType
+
+@SkipTest
+internal object ChannelInformationFingerprint : Fingerprint(
+    classFingerprint = PlayerInitFingerprint,
+    filters = listOf(string("loadVideo() called on LocalDirector in wrong state"))
+)
+
+internal val channelInformationMethods = findMethodListDirect {
+    ChannelInformationFingerprint.matchAll(2..3).map { it.method }.also { methods ->
+        check(methods.map { it.declaredClass!!.descriptor }.distinct().size == 1)
+    }
+}
+
+private fun getChannelIdFingerprint(playerResponseType: String) = Fingerprint(
+    accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.FINAL),
+    returnType = "V",
+    parameters = listOf("Ljava/lang/Object;"),
+    filters = listOf(
+        // Is live stream.
+        methodCall(definingClass = playerResponseType, returnType = "Z"),
+        // Channel id. 21.17 places the live stream check far before it.
+        methodCall(
+            definingClass = playerResponseType,
+            returnType = "Ljava/lang/String;"
+        ),
+        string(
+            "com.google.android.apps.youtube.mdx.watch.LAST_MEALBAR_PROMOTED_LIVE_FEED_CHANNELS",
+            location = MatchAfterWithin(20)
+        )
+    )
+)
+
+@get:AllowAbstract
+internal val playerResponseIsLiveMethod = findMethodDirect {
+    val playerResponseType = channelInformationMethods().first().paramTypes.first().descriptor
+    getChannelIdFingerprint(playerResponseType).instructionMatches[0].instruction.methodRef!!
+}
+
+@get:AllowAbstract
+internal val playerResponseChannelIdMethod = findMethodDirect {
+    val playerResponseType = channelInformationMethods().first().paramTypes.first().descriptor
+    getChannelIdFingerprint(playerResponseType).instructionMatches[1].instruction.methodRef!!
+}
+
+@get:AllowAbstract
+internal val playerResponseChannelNameMethod = findMethodDirect {
+    val playerResponseType = channelInformationMethods().first().paramTypes.first().descriptor
+    Fingerprint(
+        filters = listOf(
+            string("Person"),
+            methodCall(
+                definingClass = playerResponseType,
+                returnType = "Ljava/lang/String;",
+                location = MatchAfterWithin(5)
+            )
+        )
+    ).instructionMatches.last().instruction.methodRef!!
+}
+
+@get:RequireAppVersion("21.29.000")
+@get:AllowAbstract
+internal val playerResponseVideoTitleMethod = findMethodDirect {
+    val playerResponseType = channelInformationMethods().first().paramTypes.first().descriptor
+    Fingerprint(
+        accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.STATIC),
+        returnType = "Ljava/lang/String;",
+        parameters = listOf(playerResponseType),
+        filters = listOf(
+            methodCall(
+                definingClass = playerResponseType,
+                returnType = "Ljava/lang/String;"
+            ),
+            opcode(Opcode.MOVE_RESULT_OBJECT, location = MatchAfterImmediately()),
+            opcode(Opcode.IF_NEZ, location = MatchAfterImmediately()),
+            string("", location = MatchAfterImmediately())
+        )
+    ).instructionMatches.first().instruction.methodRef!!
+}
 
 internal object PlaybackSpeedOnItemClickFingerprint : Fingerprint(
     classFingerprint = PlaybackSpeedOnItemClickParentFingerprint,
@@ -48,18 +133,43 @@ val setPlaybackSpeedMethodReference = findMethodDirect {
 val PlayerControllerClass = findClassDirect { setPlaybackSpeedMethodReference().declaredClass!! }
 
 internal object PlayerControllerSetTimeReferenceFingerprint : Fingerprint(
-    filters = OpcodesFilter.opcodesToFilters(
-        Opcode.INVOKE_DIRECT_RANGE,
-        Opcode.IGET_OBJECT
-    ) + string("Media progress reported outside media playback: ", comparison = StringComparisonType.CONTAINS)
+    filters = listOf(
+        methodCall(
+            opcode = Opcode.INVOKE_DIRECT_RANGE,
+            name = "<init>",
+            parameters = listOf("J", "J", "J", "J", "J", "J", "J", "Z", "Ljava/lang/String;")
+        ),
+        string("Media progress reported outside media playback: ", comparison = StringComparisonType.CONTAINS)
+    )
 )
 
 val timeMethod = findMethodDirect {
-    PlayerControllerSetTimeReferenceFingerprint().invokes.single { it.name == "<init>" }
+    PlayerControllerSetTimeReferenceFingerprint.instructionMatches.first().instruction.methodRef!!
+}
+
+internal object PlayerStatusEnumFingerprint : Fingerprint(
+    accessFlags = listOf(AccessFlags.STATIC, AccessFlags.CONSTRUCTOR),
+    strings = listOf(
+        "NEW", "PLAYBACK_PENDING", "PLAYBACK_LOADED", "PLAYBACK_INTERRUPTED",
+        "INTERSTITIAL_REQUESTED", "INTERSTITIAL_PLAYING", "VIDEO_PLAYING", "ENDED"
+    )
+)
+
+val playerStatusMethod = findMethodDirect {
+    Fingerprint(
+        classFingerprint = PlayerInitFingerprint,
+        accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.FINAL),
+        returnType = "V",
+        parameters = listOf(PlayerStatusEnumFingerprint().declaredClass!!.descriptor),
+        filters = listOf(
+            opcode(Opcode.SGET_OBJECT),
+            methodCall(definingClass = "Lj$/time/Instant;", name = "plus")
+        )
+    )()
 }
 
 internal object PlayerInitFingerprint : Fingerprint(
-    accessFlags = listOf(AccessFlags.CONSTRUCTOR),
+    name = "<init>",
     custom = {
         declaredClass {
             addEqString("playVideo called on player response with no videoStreamingData.")
@@ -76,6 +186,10 @@ internal object SeekFingerprint : Fingerprint(
 
 val seekSourceType = findClassDirect {
     SeekFingerprint().paramTypes[1]
+}
+
+val seekSourceUnknown = findFieldDirect {
+    seekSourceUnknownField(seekSourceType().descriptor)
 }
 
 private object CreateVideoPlayerSeekbarFingerprint : Fingerprint(
@@ -103,7 +217,6 @@ internal object VideoLengthFingerprint : Fingerprint(
     )
 )
 
-
 val videoLengthField = findFieldDirect {
     VideoLengthFingerprint().usingFields.single { it.usingType == FieldUsingType.Write && it.field.typeName == "long" }.field
 }
@@ -128,9 +241,12 @@ object MdxSeekFingerprint : Fingerprint(
     }
 )
 
-
 val mdxSeekSourceType = findClassDirect {
     MdxSeekFingerprint().paramTypes[1]
+}
+
+val mdxSeekSourceUnknown = findFieldDirect {
+    seekSourceUnknownField(mdxSeekSourceType().descriptor)
 }
 
 internal object MdxPlayerDirectorSetVideoStageFingerprint : Fingerprint(
@@ -193,54 +309,113 @@ val mdxGetVideoTime = findMethodDirect {
 }
 
 /**
- * Resolves with the class found in [videoQualityChangedFingerprint].
+ * Resolves with the class found in [VideoQualityChangedFingerprint].
  */
-val playbackSpeedMenuSpeedChangedFingerprint = fingerprint {
-    classFingerprint(videoQualityChangedFingerprint)
-    accessFlags(AccessFlags.PUBLIC, AccessFlags.FINAL)
-    returns("L")
-    parameters("L")
-    opcodes(
-        Opcode.IGET,
-        Opcode.INVOKE_VIRTUAL,
-        Opcode.SGET_OBJECT,
-        Opcode.RETURN_OBJECT,
+@StrictQuery
+internal object PlaybackSpeedMenuSpeedChangedFingerprint : Fingerprint(
+    classFingerprint = VideoQualityChangedFingerprint,
+    accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.FINAL),
+    returnType = "L",
+    parameters = listOf("L"),
+    filters = listOf(
+        opcode(Opcode.IF_EQZ),
+        fieldAccess(opcode = Opcode.IGET, type = "F")
     )
-}
+)
 
-val videoQualitySetterFingerprint = fingerprint {
-    accessFlags(AccessFlags.PUBLIC, AccessFlags.FINAL)
-    returns("V")
-    parameters("[L", "I", "Z")
-    opcodes(
+internal object VideoQualitySetterFingerprint : Fingerprint(
+    accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.FINAL),
+    returnType = "V",
+    parameters = listOf("[L", "I", "Z"),
+    filters = OpcodesFilter.opcodesToFilters(
         Opcode.IF_EQZ,
         Opcode.INVOKE_VIRTUAL,
         Opcode.MOVE_RESULT_OBJECT,
         Opcode.INVOKE_VIRTUAL,
         Opcode.IPUT_BOOLEAN,
+    ),
+    strings = listOf("menu_item_video_quality")
+)
+
+/**
+ * Matches with the class found in [VideoQualitySetterFingerprint].
+ */
+@StrictQuery
+internal object SetVideoQualityFingerprint : Fingerprint(
+    classFingerprint = VideoQualitySetterFingerprint,
+    returnType = "V",
+    parameters = listOf("L"),
+    filters = listOf(
+        fieldAccess(
+            opcode = Opcode.IGET_OBJECT,
+            definingClass = "this",
+            location = MatchFirst()
+        ),
+        fieldAccess(
+            opcode = Opcode.IPUT_OBJECT,
+            location = MatchAfterImmediately()
+        ),
+        fieldAccess(
+            opcode = Opcode.IGET_OBJECT,
+            definingClass = "this",
+            location = MatchAfterImmediately()
+        ),
     )
-    strings("menu_item_video_quality")
+)
+
+val onItemClickListenerClassReference = findFieldDirect {
+    SetVideoQualityFingerprint.instructionMatches[0].instruction.fieldRef!!
+}
+val setQualityFieldReference = findFieldDirect {
+    SetVideoQualityFingerprint.instructionMatches[1].instruction.fieldRef!!
+}
+val setQualityMenuIndexMethod = findMethodDirect {
+    setQualityFieldReference().type.findMethod {
+        matcher { addParamType { descriptor = VideoQualityClass().descriptor } }
+    }.single()
 }
 
 /**
- * Matches with the class found in [videoQualitySetterFingerprint].
+ * Makes a playback the current one, such as a preloaded Short when it's scrolled to,
+ * which is not loaded again with loadVideo().
  */
-val setVideoQualityFingerprint = fingerprint {
-    classFingerprint(videoQualitySetterFingerprint)
-    returns("V")
-    parameters("L")
-    opcodes(
-        Opcode.IGET_OBJECT,
-        Opcode.IPUT_OBJECT,
-        Opcode.IGET_OBJECT,
+internal fun currentPlaybackFingerprint(playerResponseType: String) = Fingerprint(
+    classFingerprint = PlayerInitFingerprint,
+    accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.FINAL),
+    returnType = "V",
+    parameters = listOf("L"),
+    filters = listOf(
+        fieldAccess(
+            opcode = Opcode.IPUT_OBJECT,
+            definingClass = "this"
+        ),
+        // The player response of the playback.
+        methodCall(
+            returnType = playerResponseType,
+            parameters = listOf()
+        ),
+        opcode(Opcode.MOVE_RESULT_OBJECT, location = MatchAfterImmediately()),
+        opcode(Opcode.IF_EQZ, location = MatchAfterImmediately()),
+        methodCall(
+            opcode = Opcode.INVOKE_STATIC,
+            parameters = listOf(playerResponseType, "L"),
+            location = MatchAfterImmediately()
+        )
     )
+)
+
+internal val currentPlaybackApplyResponseMethod = findMethodDirect {
+    val type = channelInformationMethods().first().paramTypes.first().descriptor
+    currentPlaybackFingerprint(type).instructionMatches.last().instruction.methodRef!!
 }
 
-val onItemClickListenerClassReference =
-    findFieldDirect { setVideoQualityFingerprint().usingFields[0].field }
-val setQualityFieldReference = findFieldDirect { setVideoQualityFingerprint().usingFields[1].field }
-val setQualityMenuIndexMethod = findMethodDirect {
-    setVideoQualityFingerprint().usingFields[1].field.type.findMethod {
-        matcher { addParamType { descriptor = VideoQualityClass().descriptor } }
-    }.single()
+internal val currentPlaybackMethod = findMethodDirect {
+    val type = channelInformationMethods().first().paramTypes.first().descriptor
+    currentPlaybackFingerprint(type)()
+}
+
+internal val videoQualityFormatIdsField = findFieldDirect {
+    val constructor = VideoQualityChangedFingerprint
+        .instructionMatches.last().instruction.methodRef!!
+    constructor.declaredClass!!.fields.single { it.type == constructor.paramTypes.last() }
 }

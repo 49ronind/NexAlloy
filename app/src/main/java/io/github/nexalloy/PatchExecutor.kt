@@ -20,6 +20,7 @@ import io.github.libxposed.api.XposedInterface.Hooker
 import io.github.libxposed.api.XposedModuleInterface
 import io.github.nexalloy.BuildConfig.DEBUG
 import io.github.nexalloy.morphe.Fingerprint
+import io.github.nexalloy.morphe.FingerprintQueryCache
 import org.luckypray.dexkit.DexKitBridge
 import org.luckypray.dexkit.DexKitCacheBridge
 import org.luckypray.dexkit.annotations.DexKitExperimentalApi
@@ -40,6 +41,7 @@ typealias FindClassFunc = DexKitBridge.() -> ClassData
 typealias FindMethodFunc = DexKitBridge.() -> MethodData
 typealias FindMethodListFunc = DexKitBridge.() -> List<MethodData>
 typealias FindFieldFunc = DexKitBridge.() -> FieldData
+typealias FindFieldListFunc = DexKitBridge.() -> List<FieldData>
 
 fun patch(
     name: String = "",
@@ -189,11 +191,18 @@ class PatchExecutor(
         val t = measureTimeMillis {
             loadCacheIfValid()
             try {
+                XposedBridge.log("NexAlloy version: ${BuildConfig.BUILD_TYPE} ${BuildConfig.VERSION_NAME} ${BuildConfig.COMMIT_HASH}")
+                XposedBridge.log("${lpparam.applicationInfo.packageName} version: ${getAppVersion()}")
+
                 executePatches()
                 finalizePatching()
                 logDebugInfo()
             } finally {
-                dexkit.close()
+                try {
+                    dexkit.close()
+                } finally {
+                    FingerprintQueryCache.shared.clearClosedBridges()
+                }
             }
         }
         Logger.printDebug { "${lpparam.packageName} handleLoadPackage: ${t}ms" }
@@ -235,7 +244,11 @@ class PatchExecutor(
             }
             return done
         } finally {
-            runCatching { bridge.close() }
+            try {
+                runCatching { bridge.close() }
+            } finally {
+                FingerprintQueryCache.shared.clearClosedBridges()
+            }
         }
     }
     
@@ -289,7 +302,6 @@ class PatchExecutor(
     private fun logDebugInfo() {
         val success = failedPatches.isEmpty()
         if (DEBUG) {
-            XposedBridge.log("${lpparam.applicationInfo.packageName} version: ${getAppVersion()}")
             if (success) {
                 Utils.showToastLong("apply patches success")
             }
@@ -349,6 +361,10 @@ class PatchExecutor(
 
     val KProperty0<FindFieldFunc>.field
         get() = dexField.toField()
+
+    val KProperty0<FindFieldListFunc>.fieldList
+        get() = dexkit.getFieldsDirect(this.name, wrapFindList(this.name, this.get()) { it.descriptor })
+            .map { it.toField() }
 
     val KProperty0<FindFieldFunc>.declaredClass
         get() = classLoader.loadClass(dexField.declaredClassName)
@@ -438,6 +454,23 @@ class PatchExecutor(
 }
 
 val ExtensionResourceHook = patch {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+        // WebView and configuration changes replace AssetManagers, dropping manually added paths.
+        // Add module assets before the replacement becomes visible to background threads.
+        val hostResourcePath = appContext.applicationInfo.sourceDir
+        XposedHelpers.findMethodExact(
+            "android.app.ResourcesManager",
+            classLoader,
+            "createAssetManager",
+            "android.content.res.ResourcesKey"
+        ).hookMethod {
+            after { param ->
+                if (param.args[0].getObjectField("mResDir") != hostResourcePath) return@after
+                param.result?.callMethod("addAssetPath", modulePath)
+            }
+        }
+    }
+
     appContext.addModuleAssets()
     ResourceUtils.fallbackPackageName = BuildConfig.APPLICATION_ID
 

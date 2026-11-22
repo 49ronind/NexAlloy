@@ -18,6 +18,7 @@ import io.github.nexalloy.morphe.youtube.shared.SpeedLimiterParentFingerprint
 import io.github.nexalloy.morphe.youtube.video.speed.settingsMenuVideoSpeedGroup
 import io.github.nexalloy.patch
 import io.github.nexalloy.scopedHook
+import java.lang.reflect.Array as ReflectArray
 
 val CustomPlaybackSpeed = patch(
     description = "Adds custom playback speed options.",
@@ -63,7 +64,7 @@ val CustomPlaybackSpeed = patch(
 
     // Replace the speeds float array with custom speeds.
 
-    ::speedArrayGeneratorFingerprint.hookMethod {
+    SpeedArrayGeneratorFingerprint.hookMethod {
         val source = ::speedsFloatArrayField.field.get(null) as FloatArray
         val chunkSize = source.size
         before {
@@ -80,8 +81,8 @@ val CustomPlaybackSpeed = patch(
                 (it.invokeOriginalMethod() as Array<*>)
             }.flatMap { it.asIterable() }
 
-            val arr = java.lang.reflect.Array.newInstance(result.first()!!.javaClass, result.size)
-            result.forEachIndexed { i, v -> java.lang.reflect.Array.set(arr, i, v) }
+            val arr = ReflectArray.newInstance(result.first()!!.javaClass, result.size)
+            result.forEachIndexed { i, v -> ReflectArray.set(arr, i, v) }
 
             it.result = arr
         }
@@ -93,12 +94,20 @@ val CustomPlaybackSpeed = patch(
     // endregion
 
     // Close the unpatched playback dialog and show the custom speeds.
-    addRecyclerViewTreeHook.add { CustomPlaybackSpeedPatch.onFlyoutMenuCreate(it) }
+    addRecyclerViewTreeHook(CustomPlaybackSpeedPatch::onFlyoutMenuCreate)
 
     // Required to check if the playback speed menu is currently shown.
     addLithoFilter(PlaybackSpeedMenuFilter())
 
     // TODO Custom tap and hold 2x speed.
 
-}
+    // region Disable audio offload if audio pitch controls are enabled.
 
+    // With audio offload, the device hardware decodes the audio
+    // and usually does not support changing the pitch, so the selected pitch is ignored.
+    AudioOffloadEnabledFingerprint.hookMethod {
+        after { it.result = CustomPlaybackSpeedPatch.disableAudioOffload(it.result as Boolean) }
+    }
+
+    // endregion
+}

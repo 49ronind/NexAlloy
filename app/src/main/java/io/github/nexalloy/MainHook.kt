@@ -1,8 +1,6 @@
 package io.github.nexalloy
 
 import android.app.Application
-import app.morphe.extension.shared.ResourceType
-import app.morphe.extension.shared.ResourceUtils
 import app.morphe.extension.shared.Utils
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
@@ -10,6 +8,7 @@ import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
 import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam
+import io.github.nexalloy.common.CHECK_BETA_UPDATES
 import io.github.nexalloy.common.UpdateChecker
 import io.github.nexalloy.morphe.ResourceFinder
 import io.github.nexalloy.morphe.resourceMappings
@@ -43,7 +42,7 @@ class MainHook : XposedModule() {
 
             resourceMappings = object : ResourceFinder {
                 override operator fun get(type: String, name: String): Int {
-                    val id = ResourceUtils.getIdentifier(ResourceType.fromValue(type), name)
+                    val id = app.resources.getIdentifier(name, type, param.packageName)
                     if (id == 0) throw Exception("Could not find resource type: $type name: $name")
                     return id
                 }
@@ -79,7 +78,7 @@ fun inContext(lpparam: PackageReadyParam, f: (Application) -> Unit) {
             if (modulePath.startsWith("/data/app/")) {
                 val prefs = xposed.getRemotePreferences("prefs")
                 if (!prefs.getBoolean("disable_auto_check_update", false)) {
-                    UpdateChecker().hookNewActivity()
+                    UpdateChecker { prefs.getBoolean(CHECK_BETA_UPDATES, false) }.hookNewActivity()
                 }
             }
         }

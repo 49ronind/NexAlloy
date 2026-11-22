@@ -1,19 +1,16 @@
 package io.github.nexalloy.morphe.youtube.layout.buttons.action
 
-import app.morphe.extension.youtube.innertube.NextResponseOuterClass
 import app.morphe.extension.youtube.patches.components.QuickActionButtonsFilter
 import app.morphe.extension.youtube.patches.components.VideoActionButtonsFilter
-import io.github.nexalloy.callMethod
 import io.github.nexalloy.morphe.shared.misc.litho.filter.addLithoFilter
-import io.github.nexalloy.morphe.shared.misc.litho.node.hookTreeNodeResult
+import io.github.nexalloy.morphe.shared.misc.proto.hookElement
 import io.github.nexalloy.morphe.shared.misc.settings.preference.PreferenceCategory
 import io.github.nexalloy.morphe.shared.misc.settings.preference.PreferenceScreenPreference
 import io.github.nexalloy.morphe.shared.misc.settings.preference.SwitchPreference
+import io.github.nexalloy.morphe.youtube.misc.fix.videoactionbar.restoreOldVideoActionBarPatch
 import io.github.nexalloy.morphe.youtube.misc.litho.filter.LithoFilter
-import io.github.nexalloy.morphe.youtube.misc.litho.node.TreeNodeElementHook
+import io.github.nexalloy.morphe.youtube.misc.proto.elementProtoParserHookPatch
 import io.github.nexalloy.morphe.youtube.misc.settings.PreferenceScreen
-import io.github.nexalloy.morphe.youtube.shared.WatchNextResponseParserFingerprint
-import io.github.nexalloy.morphe.youtube.video.information.VideoInformationPatch
 import io.github.nexalloy.patch
 
 val HideVideoActionButtons = patch(
@@ -22,8 +19,8 @@ val HideVideoActionButtons = patch(
 ) {
     dependsOn(
         LithoFilter,
-        TreeNodeElementHook,
-        VideoInformationPatch
+        elementProtoParserHookPatch,
+        restoreOldVideoActionBarPatch
     )
 
     PreferenceScreen.PLAYER.addPreferences(
@@ -62,18 +59,18 @@ val HideVideoActionButtons = patch(
 //                            key = "morphe_quick_actions_top_margin",
 //                            tag = "app.morphe.extension.shared.settings.preference.SeekBarPreference"
 //                        ),
-                        SwitchPreference("morphe_hide_quick_actions"),
-                        SwitchPreference("morphe_hide_quick_actions_ask_button"),
-                        SwitchPreference("morphe_hide_quick_actions_comments_button"),
+                        SwitchPreference("morphe_hide_quick_actions", titleKey = "morphe_hide_action_bar_title"),
+                        SwitchPreference("morphe_hide_quick_actions_ask_button", titleKey = "morphe_hide_ask_button_title"),
+                        SwitchPreference("morphe_hide_quick_actions_comments_button", titleKey = "morphe_hide_comments_button_title"),
                         SwitchPreference("morphe_hide_quick_actions_dislike_button"),
                         SwitchPreference("morphe_hide_quick_actions_like_button"),
                         SwitchPreference("morphe_hide_quick_actions_live_chat_button"),
                         SwitchPreference("morphe_hide_quick_actions_mix_button"),
-                        SwitchPreference("morphe_hide_quick_actions_more_button"),
+                        SwitchPreference("morphe_hide_quick_actions_more_button", titleKey = "morphe_hide_more_button_title"),
                         SwitchPreference("morphe_hide_quick_actions_more_videos_button"),
                         SwitchPreference("morphe_hide_quick_actions_playlist_button"),
-                        SwitchPreference("morphe_hide_quick_actions_save_button"),
-                        SwitchPreference("morphe_hide_quick_actions_share_button")
+                        SwitchPreference("morphe_hide_quick_actions_save_button", titleKey = "morphe_hide_save_button_title"),
+                        SwitchPreference("morphe_hide_quick_actions_share_button", titleKey = "morphe_hide_share_button_title")
                     )
                 )
             )
@@ -83,23 +80,6 @@ val HideVideoActionButtons = patch(
     addLithoFilter(VideoActionButtonsFilter())
     addLithoFilter(QuickActionButtonsFilter())
 
-    hookTreeNodeResult(VideoActionButtonsFilter::onLazilyConvertedElementLoaded)
-
-    WatchNextResponseParserFingerprint.hookMethod {
-        before {
-            val messageLite = it.args[0]
-
-            val nextResponse =
-                NextResponseOuterClass.NextResponse.parseFrom(messageLite.callMethod("toByteArray") as ByteArray)
-
-            if (!nextResponse.hasPrimaryContents()) {
-                return@before
-            }
-
-            val primaryContents = nextResponse.primaryContents
-            if (primaryContents.hasSingleColumnWatchNextResults()) {
-                VideoActionButtonsFilter.onSingleColumnWatchNextResultsLoaded(primaryContents.singleColumnWatchNextResults)
-            }
-        }
-    }
+    // The hidden buttons are removed from the element of the action bar, for every layout of the action bar.
+    hookElement(VideoActionButtonsFilter::hideActionButtons)
 }

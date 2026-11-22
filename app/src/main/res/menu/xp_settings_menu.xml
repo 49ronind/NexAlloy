@@ -10,6 +10,11 @@
         android:checkable="true"
         android:showAsAction="never" />
     <item
+        android:id="@+id/menu_check_beta_updates"
+        android:title="@string/check_beta_updates_title"
+        android:checkable="true"
+        android:showAsAction="never" />
+    <item
         android:id="@+id/menu_disable_auto_check"
         android:title="@string/disable_auto_check_update_title"
         android:checkable="true"

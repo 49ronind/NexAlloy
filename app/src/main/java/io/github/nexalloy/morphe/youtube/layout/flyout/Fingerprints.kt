@@ -1,5 +1,6 @@
 package io.github.nexalloy.morphe.youtube.layout.flyout
 
+import io.github.nexalloy.FindClassFunc
 import io.github.nexalloy.RequireAppVersion
 import io.github.nexalloy.SkipTest
 import io.github.nexalloy.morphe.AccessFlags
@@ -15,10 +16,18 @@ import io.github.nexalloy.morphe.findMethodDirect
 import io.github.nexalloy.morphe.findMethodListDirect
 import io.github.nexalloy.morphe.literal
 import io.github.nexalloy.morphe.methodCall
-import io.github.nexalloy.morphe.newInstance
 import io.github.nexalloy.morphe.opcode
 import io.github.nexalloy.morphe.resourceLiteral
 import io.github.nexalloy.morphe.string
+import io.github.nexalloy.morphe.youtube.layout.hide.general.ContextualMenuItemBuilderFingerprint
+import io.github.nexalloy.morphe.youtube.shared.YOUTUBE_MAIN_ACTIVITY_CLASS_TYPE
+
+internal object LocalQueueOnUserLeaveHintFingerprint : Fingerprint(
+    definingClass = YOUTUBE_MAIN_ACTIVITY_CLASS_TYPE,
+    name = "onUserLeaveHint",
+    returnType = "V",
+    parameters = emptyList()
+)
 
 val ProtocolBufferField = findFieldDirect {
     InteractiveStickerRendererGetEditViewFingerprint.instructionMatches.last().instruction.fieldRef!!
@@ -32,8 +41,15 @@ val FlyoutMenuVideoIdClass = findClassDirect {
     FlyoutMenuItemMessageFingerprint.instructionMatches[1].instruction.classRef!!
 }
 
-val FlyoutMenuVideoIdField = findFieldDirect {
-    val messageType = FlyoutMenuVideoIdClass()
+val PlaylistFlyoutMenuVideoIdClass = findClassDirect {
+    SingularGeneratedExtensionFingerprint.instructionMatches[1].instruction.fieldRef!!.type
+}
+
+val FlyoutMenuVideoIdField = videoIdField(FlyoutMenuVideoIdClass)
+val PlaylistFlyoutMenuVideoIdField = videoIdField(PlaylistFlyoutMenuVideoIdClass)
+
+private fun videoIdField(messageClass: FindClassFunc) = findFieldDirect {
+    val messageType = messageClass()
 
     // videoId is the only string field in the class initialized to an empty string.
     Fingerprint(
@@ -93,23 +109,6 @@ internal object FeedFlyoutBufferObjectFingerprint : Fingerprint(
     )
 )
 
-internal object OnClickLithoButtonBufferObjectFingerprint : Fingerprint(
-    accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.FINAL),
-    returnType = "V",
-    parameters = listOf("L"),
-    filters = listOf(
-        opcode(opcode = Opcode.NEW_INSTANCE),
-        opcode(opcode = Opcode.INVOKE_DIRECT, location = MatchAfterImmediately()),
-        newInstance(type = "Ljava/util/HashMap;", location = MatchAfterWithin(5)),
-        methodCall(
-            opcode = Opcode.INVOKE_DIRECT,
-            smali = "Ljava/util/HashMap;-><init>(Ljava/util/Map;)V",
-            location = MatchAfterWithin(5)
-        ),
-        string("command_status_callback", location = MatchAfterImmediately())
-    )
-)
-
 internal object FullHistoryFlyoutBufferObjectFingerprint : Fingerprint(
     accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.FINAL),
     returnType = "V",
@@ -129,12 +128,34 @@ val getSubMessageReference = findMethodDirect {
     FeedFlyoutButtonsInitializerFingerprint.instructionMatches.first().instruction.methodRef!!
 }
 
-val enumIntField =findFieldDirect {
+val feedFlyoutButtonTextMethod = findMethodDirect {
+    FeedFlyoutButtonsInitializerFingerprint.instructionMatches[2].instruction.methodRef!!
+}
+
+val contextualMenuItemStyleMethod = findMethodDirect {
+    ContextualMenuItemBuilderFingerprint.instructionMatches[5].instruction.methodRef!!
+}
+
+val enumIntField = findFieldDirect {
     FeedFlyoutButtonsInitializerFingerprint.instructionMatches[6].instruction.fieldRef!!
 }
 
 val enumMethodCall = findMethodDirect {
     FeedFlyoutButtonsInitializerFingerprint.instructionMatches[7].instruction.methodRef!!
+}
+
+val feedFlyoutButtonRunnableField = findFieldDirect {
+    FeedFlyoutButtonsInitializerFingerprint.instructionMatches.last().instruction.fieldRef!!
+}
+
+val feedFlyoutMenuItemOptionalMethod = findMethodDirect {
+    val match = FeedFlyoutButtonsInitializerFingerprint.match()
+    val runnableIndex = match.instructionMatches.last().index
+    match.method.instructions.drop(runnableIndex + 1).single {
+        it.opcode in listOf(Opcode.INVOKE_STATIC.ordinal, Opcode.INVOKE_STATIC_RANGE.ordinal) &&
+                it.methodRef?.returnType == match.method.returnType &&
+                it.methodRef?.paramTypeNames == listOf("java.lang.Object")
+    }.methodRef!!
 }
 
 internal object FeedFlyoutButtonsInitializerFingerprint : Fingerprint(
@@ -166,7 +187,6 @@ internal object FeedFlyoutButtonsInitializerFingerprint : Fingerprint(
     )
 )
 
-@SkipTest
 @RequireAppVersion(maxVersion = "21.05.000")
 internal object FeedFlyoutButtonsInitializerOnItemClickFingerprint : Fingerprint(
     classFingerprint = FeedFlyoutButtonsInitializerFingerprint,

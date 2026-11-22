@@ -30,8 +30,28 @@ import kotlin.random.Random
 data class ReleaseInfo(
     @SerializedName("tag_name") val tagName: String,
     @SerializedName("body_html") val releaseNoteHtml: String,
-    @SerializedName("html_url") val releaseUrl: String
-)
+    @SerializedName("html_url") val releaseUrl: String,
+    @SerializedName("assets") val assets: List<ReleaseAsset> = emptyList()
+) {
+    fun getUpdateVersion(
+        checkBetaUpdates: Boolean,
+        currentVersionCode: Int,
+        currentCommit: String
+    ): String? {
+        if (checkBetaUpdates) {
+            val apkNamePattern = Regex("""NexAlloy-(.+)\.apk""")
+            val commit = checkNotNull(assets.mapNotNull {
+                apkNamePattern.matchEntire(it.name)?.groupValues?.get(1)
+            }.singleOrNull()) { "Expected exactly one NexAlloy APK asset in autobuild" }
+            return "Nightly build ($commit)".takeIf { commit != currentCommit }
+        }
+
+        val version = VersionInfo.fromTagName(tagName)
+        return version.versionName.takeIf { version.versionCode > currentVersionCode }
+    }
+}
+
+data class ReleaseAsset(@SerializedName("name") val name: String)
 
 data class VersionInfo(val versionCode: Int, val versionName: String) {
     companion object {
@@ -57,16 +77,15 @@ data class VersionInfo(val versionCode: Int, val versionName: String) {
 const val OWNER = "NexAlloy"
 const val REPO = "NexAlloy"
 const val currentVersionCode = BuildConfig.VERSION_CODE
+const val CHECK_BETA_UPDATES = "check_beta_updates"
 
-class UpdateChecker() : CoroutineScope {
+class UpdateChecker(private val checkBetaUpdates: () -> Boolean = { false }) : CoroutineScope {
     override val coroutineContext: CoroutineContext
         get() = Dispatchers.IO + CoroutineExceptionHandler { _, err ->
             Logger.printException({ "coroutineContext error" }, err)
         }
 
     private var currentActivity = WeakReference<Activity>(null)
-    private lateinit var latestVersionInfo: VersionInfo
-    private lateinit var latestRelease: ReleaseInfo
 
     var runOnce = false
 
@@ -102,8 +121,10 @@ class UpdateChecker() : CoroutineScope {
     fun checkUpdate(silent: Boolean = true) {
         launch {
             try {
+                val betaUpdates = checkBetaUpdates()
+                val releasePath = if (betaUpdates) "tags/autobuild" else "latest"
                 val response = Fuel.get(
-                    "https://api.github.com/repos/$OWNER/$REPO/releases/latest",
+                    "https://api.github.com/repos/$OWNER/$REPO/releases/$releasePath",
                     headers = mapOf("Accept" to "application/vnd.github.html+json")
                 )
                 if (response.statusCode != 200) {
@@ -113,12 +134,13 @@ class UpdateChecker() : CoroutineScope {
 
                 val content = response.source.readString()
                 Logger.printDebug { content }
-                latestRelease = Gson().fromJson(content, ReleaseInfo::class.java)
-                latestVersionInfo = VersionInfo.fromTagName(latestRelease.tagName)
-                Logger.printDebug { "$latestVersionInfo" }
-                if (latestVersionInfo.versionCode > currentVersionCode) {
-                    Logger.printInfo { "Found new version of NexAlloy ${latestRelease.tagName}" }
-                    showUpdateDialog()
+                val release = Gson().fromJson(content, ReleaseInfo::class.java)
+                val updateVersion = release.getUpdateVersion(
+                    betaUpdates, currentVersionCode, BuildConfig.COMMIT_HASH
+                )
+                if (updateVersion != null) {
+                    Logger.printInfo { "Found new version of NexAlloy $updateVersion" }
+                    showUpdateDialog(release, updateVersion)
                 } else {
                     Logger.printInfo { "no update found for NexAlloy" }
                     if (!silent) Utils.showToastLong("NexAlloy is up to date.")
@@ -144,26 +166,25 @@ class UpdateChecker() : CoroutineScope {
             val content = response.source.readString()
             Logger.printDebug { content }
 
-            latestRelease = Gson().fromJson(content, ReleaseInfo::class.java)
-            latestVersionInfo = VersionInfo.fromTagName(latestRelease.tagName)
-            showUpdateDialog()
+            val release = Gson().fromJson(content, ReleaseInfo::class.java)
+            showUpdateDialog(release, VersionInfo.fromTagName(release.tagName).versionName)
         }
     }
 
     fun requireActivity() = currentActivity.get()!!
 
-    private fun showUpdateDialog() {
+    private fun showUpdateDialog(release: ReleaseInfo, versionName: String) {
         launch(Dispatchers.Main) {
             try {
                 val theme =
                     if (Utils.isDarkModeEnabled()) R.style.Theme_DeviceDefault_Dialog_Alert
                     else R.style.Theme_DeviceDefault_Light_Dialog_Alert
                 val dialog = AlertDialog.Builder(requireActivity(), theme)
-                    .setTitle("Found new version of NexAlloy ${latestVersionInfo.versionName}")
+                    .setTitle("Found new version of NexAlloy $versionName")
                     .setMessage(
-                        Html.fromHtml(latestRelease.releaseNoteHtml, Html.FROM_HTML_MODE_LEGACY)
+                        Html.fromHtml(release.releaseNoteHtml, Html.FROM_HTML_MODE_LEGACY)
                     ).setPositiveButton(R.string.ok) { _, _ ->
-                        openReleasePage()
+                        openReleasePage(release.releaseUrl)
                     }.setNegativeButton(requireActivity().getString(R.string.cancel), null)
                     .create()
                 dialog.show()
@@ -175,9 +196,9 @@ class UpdateChecker() : CoroutineScope {
         }
     }
 
-    private fun openReleasePage() {
+    private fun openReleasePage(releaseUrl: String) {
         try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(latestRelease.releaseUrl))
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(releaseUrl))
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             requireActivity().startActivity(intent)
         } catch (e: Exception) {

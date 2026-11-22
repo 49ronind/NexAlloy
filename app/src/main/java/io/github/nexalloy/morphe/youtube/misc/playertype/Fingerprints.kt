@@ -11,11 +11,10 @@ import io.github.nexalloy.morphe.findMethodDirect
 import io.github.nexalloy.morphe.opcode
 import io.github.nexalloy.morphe.resourceLiteral
 import io.github.nexalloy.morphe.string
-import org.luckypray.dexkit.query.enums.StringMatchType
 import org.luckypray.dexkit.result.FieldUsingType
 
 object PlayerTypeFingerprint : Fingerprint(
-    definingClass = "Lcom/google/android/apps/youtube/app/common/player/overlay/YouTubePlayerOverlaysLayout;",
+    definingClass = "Lcom/google/android/apps/youtube/app/player/YouTubePlayerViewNotForReflection;",
     accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.FINAL),
     returnType = "V",
     custom = {
@@ -50,13 +49,14 @@ internal object ControlsStateToStringFingerprint : Fingerprint(
 internal object VideoStateEnumFingerprint : Fingerprint(
     accessFlags = listOf(AccessFlags.STATIC, AccessFlags.CONSTRUCTOR),
     parameters = listOf(),
-    strings = listOf(
-        "NEW",
-        "PLAYING",
-        "PAUSED",
-        "RECOVERABLE_ERROR",
-        "UNRECOVERABLE_ERROR",
-        "ENDED"
+    filters = listOf(
+        string("NEW"),
+        string("PLAYING"),
+        string("PAUSED"),
+        string("RECOVERABLE_ERROR"),
+        string("UNRECOVERABLE_ERROR"),
+        string("ENDED"),
+        opcode(Opcode.APUT_OBJECT)
     )
 )
 

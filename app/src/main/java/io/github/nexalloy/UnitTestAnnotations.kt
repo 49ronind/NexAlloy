@@ -8,6 +8,10 @@ annotation class SkipTest()
 @Target(AnnotationTarget.PROPERTY_GETTER, AnnotationTarget.FUNCTION, AnnotationTarget.CLASS)
 annotation class TargetApp(val app: String)
 
+// Allow abstract method results used for invocation rather than hooking.
+@Target(AnnotationTarget.PROPERTY_GETTER, AnnotationTarget.FUNCTION, AnnotationTarget.CLASS)
+annotation class AllowAbstract
+
 class AppVersion(val versionString: String) : Comparable<AppVersion> {
     init {
         require(versionString.matches(Regex("\\d+(\\.\\d+)*"))) {

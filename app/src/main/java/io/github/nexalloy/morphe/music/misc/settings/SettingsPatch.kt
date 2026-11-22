@@ -3,20 +3,26 @@ package io.github.nexalloy.morphe.music.misc.settings
 import android.app.Activity
 import android.os.Bundle
 import app.morphe.extension.music.settings.MusicActivityHook
+import app.morphe.extension.music.settings.preference.AppLanguagePreference
 import app.morphe.extension.shared.Logger
 import app.morphe.extension.shared.ResourceUtils
 import app.morphe.extension.shared.Utils
+import app.morphe.extension.shared.settings.preference.ClearNewSettingsIndicatorPreference
 import app.morphe.extension.shared.settings.preference.ImportExportPreference
+import app.morphe.extension.shared.settings.preference.SeekBarPreference
 import app.morphe.extension.shared.settings.preference.about.MorpheAboutPreference
 import de.robv.android.xposed.XC_MethodReplacement
 import io.github.nexalloy.R
+import io.github.nexalloy.hookMethod
 import io.github.nexalloy.morphe.music.shared.MusicActivityOnCreateFingerprint
+import io.github.nexalloy.morphe.shared.misc.settings.preference.BasePreference
 import io.github.nexalloy.morphe.shared.misc.settings.preference.BasePreferenceScreen
 import io.github.nexalloy.morphe.shared.misc.settings.preference.InputType
 import io.github.nexalloy.morphe.shared.misc.settings.preference.NonInteractivePreference
 import io.github.nexalloy.morphe.shared.misc.settings.preference.PreferenceScreenPreference
 import io.github.nexalloy.morphe.shared.misc.settings.preference.SwitchPreference
 import io.github.nexalloy.morphe.shared.misc.settings.preference.TextPreference
+import io.github.nexalloy.morphe.shared.misc.settings.preference.noTitleUnsortedPreferenceCategory
 import io.github.nexalloy.morphe.shared.settings.preferences
 import io.github.nexalloy.morphe.youtube.misc.settings.PreferenceFragmentCompat_addPreferencesFromResource
 import io.github.nexalloy.patch
@@ -40,7 +46,7 @@ val SettingsHook = patch(
 
     // Add an "About" preference to the top.
     preferences += NonInteractivePreference(
-        key = "morphe_settings_music_screen_0_about",
+        key = "morphe_settings_music_screen_00_about",
         summaryKey = null,
         icon = "@drawable/morphe_settings_screen_00_about",
         iconBold = "@drawable/morphe_settings_screen_00_about_bold",
@@ -55,6 +61,20 @@ val SettingsHook = patch(
     )
 
     PreferenceScreen.MISC.addPreferences(
+        // TODO Patch update notices need the upstream lifecycle and release channel integration.
+        // ListPreference("morphe_patches_update_notice"),
+        noTitleUnsortedPreferenceCategory(
+            NonInteractivePreference("morphe_settings_new_indicator_days", tag = SeekBarPreference::class.java, selectable = true),
+            NonInteractivePreference("morphe_settings_new_indicator_clear",
+                tag = ClearNewSettingsIndicatorPreference::class.java,
+                selectable = true)
+        ),
+        NonInteractivePreference(
+            key = "morphe_music_app_language",
+            summaryKey = null,
+            tag = AppLanguagePreference::class.java,
+            selectable = true
+        ),
         TextPreference(
             key = null,
             titleKey = "morphe_pref_import_export_title",
@@ -82,7 +102,18 @@ val SettingsHook = patch(
 
     // Remove other methods as they will break as the onCreate method is modified above.
     ::googleApiActivityNOTonCreate.dexMethodList.forEach {
-        if (it.returnTypeName == "void") it.hookMethod(XC_MethodReplacement.DO_NOTHING)
+        if (it.returnTypeName == "void" && it.name != "finish") {
+            it.hookMethod(XC_MethodReplacement.DO_NOTHING)
+        }
+    }
+
+    val settingsActivityClass = ::googleApiActivityClass.clazz
+    settingsActivityClass.getMethod("finish").hookMethod {
+        before {
+            if (settingsActivityClass.isInstance(it.thisObject) &&
+                MusicActivityHook.handleFinish(it.thisObject as Activity)
+            ) it.result = null
+        }
     }
 
     MusicActivityOnCreateFingerprint.hookMethod {
@@ -95,29 +126,40 @@ val SettingsHook = patch(
 }
 
 object PreferenceScreen : BasePreferenceScreen() {
+    private val miniplayerPreferences = mutableSetOf<BasePreference>()
+    fun addMiniplayerPreferences(vararg preferences: BasePreference) {
+        if (miniplayerPreferences.isEmpty()) {
+            PLAYER.addPreferences(PreferenceScreenPreference(
+                key = "morphe_music_miniplayer_screen",
+                sorting = PreferenceScreenPreference.Sorting.UNSORTED,
+                preferences = miniplayerPreferences))
+        }
+        miniplayerPreferences.addAll(preferences)
+    }
+
     val ADS = Screen(
-        key = "morphe_settings_music_screen_1_ads",
+        key = "morphe_settings_music_screen_01_ads",
         summaryKey = null,
         icon = "@drawable/morphe_settings_screen_01_ads",
         iconBold = "@drawable/morphe_settings_screen_01_ads_bold",
         layout = "@layout/morphe_preference_with_icon"
     )
     val GENERAL = Screen(
-        key = "morphe_settings_music_screen_3_general",
+        key = "morphe_settings_music_screen_03_general",
         summaryKey = null,
         icon = "@drawable/morphe_settings_screen_04_general",
         iconBold = "@drawable/morphe_settings_screen_04_general_bold",
         layout = "@layout/morphe_preference_with_icon"
     )
     val PLAYER = Screen(
-        key = "morphe_settings_music_screen_4_player",
+        key = "morphe_settings_music_screen_06_player",
         summaryKey = null,
         icon = "@drawable/morphe_settings_screen_05_player",
         iconBold = "@drawable/morphe_settings_screen_05_player_bold",
         layout = "@layout/morphe_preference_with_icon"
     )
     val MISC = Screen(
-        key = "morphe_settings_music_screen_9_misc",
+        key = "morphe_settings_music_screen_05_misc",
         summaryKey = null,
         icon = "@drawable/morphe_settings_screen_11_misc",
         iconBold = "@drawable/morphe_settings_screen_11_misc_bold",

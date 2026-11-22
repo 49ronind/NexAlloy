@@ -23,6 +23,7 @@ import io.github.nexalloy.AppPatchInfo
 import io.github.nexalloy.BuildConfig
 import io.github.nexalloy.R
 import io.github.nexalloy.appPatchConfigurations
+import io.github.nexalloy.common.CHECK_BETA_UPDATES
 import io.github.nexalloy.common.UpdateChecker
 import kotlin.system.exitProcess
 
@@ -66,11 +67,13 @@ class SettingsActivity : Activity(), SettingApplication.ServiceStateListener {
 
     override fun onServiceStateChanged(service: XposedService?) {
         mService = service
+        runOnUiThread { invalidateOptionsMenu() }
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.xp_settings_menu, menu)
         menu.findItem(R.id.menu_disable_auto_check).isVisible = false
+        menu.findItem(R.id.menu_check_beta_updates).isVisible = false
         return true
     }
 
@@ -80,13 +83,17 @@ class SettingsActivity : Activity(), SettingApplication.ServiceStateListener {
             packageManager.getComponentEnabledSetting(aliasName) == PackageManager.COMPONENT_ENABLED_STATE_DISABLED
 
         val menuDisableAutoCheck = menu.findItem(R.id.menu_disable_auto_check)
+        val menuCheckBetaUpdates = menu.findItem(R.id.menu_check_beta_updates)
         try {
             val prefs = mService!!.getRemotePreferences("prefs")
             menuDisableAutoCheck.isChecked =
                 prefs.getBoolean("disable_auto_check_update", false)
             menuDisableAutoCheck.isVisible = true
+            menuCheckBetaUpdates.isChecked = prefs.getBoolean(CHECK_BETA_UPDATES, false)
+            menuCheckBetaUpdates.isVisible = true
         } catch (_: Throwable) {
             menuDisableAutoCheck.isVisible = false
+            menuCheckBetaUpdates.isVisible = false
         }
         return true
     }
@@ -112,11 +119,13 @@ class SettingsActivity : Activity(), SettingApplication.ServiceStateListener {
                 true
             }
 
-            R.id.menu_disable_auto_check -> {
+            R.id.menu_disable_auto_check, R.id.menu_check_beta_updates -> {
                 val newChecked = !item.isChecked
                 item.isChecked = newChecked
+                val key = if (item.itemId == R.id.menu_check_beta_updates) CHECK_BETA_UPDATES
+                else "disable_auto_check_update"
                 mService!!.getRemotePreferences("prefs")
-                    .edit().putBoolean("disable_auto_check_update", newChecked).apply()
+                    .edit().putBoolean(key, newChecked).apply()
                 true
             }
 
@@ -133,6 +142,10 @@ class SettingsActivity : Activity(), SettingApplication.ServiceStateListener {
     @Suppress("OVERRIDE_DEPRECATION")
     class SettingsFragment : PreferenceFragment(), SettingApplication.ServiceStateListener {
         private var mService: XposedService? = null
+        private var autoUpdateChecked = false
+        private val updateChecker = UpdateChecker {
+            mService?.getRemotePreferences("prefs")?.getBoolean(CHECK_BETA_UPDATES, false) ?: false
+        }
 
         private var offPreference: Preference? = null
         private var onCategory: PreferenceCategory? = null
@@ -150,6 +163,7 @@ class SettingsActivity : Activity(), SettingApplication.ServiceStateListener {
         @Deprecated("Deprecated in Java")
         override fun onCreate(savedInstanceState: Bundle?) {
             super.onCreate(savedInstanceState)
+            updateChecker.setActivity(activity)
 
             val rootScreen = preferenceManager.createPreferenceScreen(context)
             preferenceScreen = rootScreen
@@ -186,19 +200,11 @@ class SettingsActivity : Activity(), SettingApplication.ServiceStateListener {
                     """Current version: ${BuildConfig.VERSION_NAME} (${BuildConfig.COMMIT_HASH}) ${BuildConfig.BUILD_TYPE}
                        |Build Date: ${DateUtils.getRelativeTimeSpanString(BuildConfig.COMMIT_DATE * 1000)}""".trimMargin()
                 setOnPreferenceClickListener {
-                    UpdateChecker().apply {
-                        setActivity(activity)
-                        checkUpdate(silent = false)
-                    }
+                    updateChecker.checkUpdate(silent = false)
                     true
                 }
                 rootScreen.addPreference(this)
             }
-            UpdateChecker().apply {
-                setActivity(activity)
-                autoCheckUpdate()
-            }
-
             updateDynamicUI(false)
         }
 
@@ -259,6 +265,11 @@ class SettingsActivity : Activity(), SettingApplication.ServiceStateListener {
                 }
 
                 updateDynamicUI(isModuleActivated)
+                // Wait for remote preferences before choosing the update channel.
+                if (isModuleActivated && !autoUpdateChecked) {
+                    autoUpdateChecked = true
+                    updateChecker.autoCheckUpdate()
+                }
             }
         }
     }

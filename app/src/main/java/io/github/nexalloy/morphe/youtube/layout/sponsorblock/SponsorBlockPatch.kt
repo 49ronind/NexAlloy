@@ -21,7 +21,6 @@ import app.morphe.extension.youtube.sponsorblock.ui.SponsorBlockStatsPreferenceC
 import app.morphe.extension.youtube.sponsorblock.ui.SponsorBlockViewController
 import app.morphe.extension.youtube.sponsorblock.ui.VotingButton
 import io.github.nexalloy.R
-import io.github.nexalloy.morphe.music.misc.playservice.versionCheckPatch
 import io.github.nexalloy.morphe.shared.misc.settings.preference.BasePreference
 import io.github.nexalloy.morphe.shared.misc.settings.preference.InputType
 import io.github.nexalloy.morphe.shared.misc.settings.preference.ListPreference
@@ -30,26 +29,37 @@ import io.github.nexalloy.morphe.shared.misc.settings.preference.PreferenceCateg
 import io.github.nexalloy.morphe.shared.misc.settings.preference.PreferenceScreenPreference
 import io.github.nexalloy.morphe.shared.misc.settings.preference.SwitchPreference
 import io.github.nexalloy.morphe.shared.misc.settings.preference.TextPreference
+import io.github.nexalloy.morphe.shared.misc.settings.preference.screenInfoPreferenceCategory
+import io.github.nexalloy.morphe.youtube.interaction.downloads.OfflineVideoEndpointFingerprint
 import io.github.nexalloy.morphe.youtube.misc.playercontrols.ControlInitializer
 import io.github.nexalloy.morphe.youtube.misc.playercontrols.LegacyPlayerControls
 import io.github.nexalloy.morphe.youtube.misc.playercontrols.addTopControl
 import io.github.nexalloy.morphe.youtube.misc.playercontrols.disableNewPlayerControlsFeatureFlag
 import io.github.nexalloy.morphe.youtube.misc.playercontrols.initializeTopControl
 import io.github.nexalloy.morphe.youtube.misc.playertype.PlayerTypeHook
+import io.github.nexalloy.morphe.youtube.misc.playservice.VersionCheck
 import io.github.nexalloy.morphe.youtube.misc.playservice.is_21_36_or_greater
 import io.github.nexalloy.morphe.youtube.misc.settings.PreferenceScreen
 import io.github.nexalloy.morphe.youtube.video.information.VideoInformationPatch
 import io.github.nexalloy.morphe.youtube.video.information.onCreateHook
-import io.github.nexalloy.morphe.youtube.video.information.videoTimeHooks
+import io.github.nexalloy.morphe.youtube.video.information.videoTimeHook
 import io.github.nexalloy.morphe.youtube.video.videoid.VideoId
-import io.github.nexalloy.morphe.youtube.video.videoid.videoIdHooks
+import io.github.nexalloy.morphe.youtube.video.videoid.hookVideoId
 import io.github.nexalloy.patch
 import io.github.nexalloy.scopedHook
 import org.luckypray.dexkit.wrap.DexMethod
 
 private const val SB_PREFERENCES_PACKAGE = "app.morphe.extension.youtube.sponsorblock.preferences"
 public fun categoryPreference(settingKey: String): BasePreference =
-    object : BasePreference(settingKey, null, null, null, null, null, SegmentCategoryPreference::class.java) {}
+    object : BasePreference(
+        settingKey,
+        null,
+        null,
+        null,
+        null,
+        null,
+        SegmentCategoryPreference::class.java
+    ) {}
 
 val SponsorBlock = patch(
     name = "SponsorBlock",
@@ -60,7 +70,7 @@ val SponsorBlock = patch(
         VideoId,
         PlayerTypeHook,
         LegacyPlayerControls,
-        versionCheckPatch
+        VersionCheck
     )
 
     PreferenceScreen.SPONSORBLOCK.addPreferences(
@@ -122,7 +132,8 @@ val SponsorBlock = patch(
             key = "morphe_sb_general",
             sorting = PreferenceScreenPreference.Sorting.UNSORTED,
             preferences = setOf(
-                SwitchPreference("morphe_sb_toast_on_connection_error", summary = true),
+                SwitchPreference("morphe_sb_offline_segments", summary = true),
+                    SwitchPreference("morphe_sb_toast_on_connection_error", summary = true),
                 SwitchPreference("morphe_sb_track_skip_count", summary = true),
                 TextPreference(
                     key = "morphe_sb_min_segment_duration",
@@ -157,12 +168,12 @@ val SponsorBlock = patch(
             preferences = emptySet(), // Preferences are added by custom class at runtime.
             tag = SponsorBlockStatsPreferenceCategory::class.java
         ),
-        PreferenceCategory(
+        screenInfoPreferenceCategory(
             key = "morphe_sb_about",
-            sorting = PreferenceScreenPreference.Sorting.UNSORTED,
             preferences = setOf(
                 NonInteractivePreference(
                     key = "morphe_sb_about_api",
+                    titleKey = null,
                     tag = SponsorBlockAboutPreference::class.java,
                     selectable = true,
                 )
@@ -177,8 +188,8 @@ val SponsorBlock = patch(
     )
 
     // Hook the video time methods.
-    videoTimeHooks.add { YouTubeSponsorBlockConfig.setVideoTime(it) }
-    videoIdHooks.add { YouTubeSponsorBlockConfig.setCurrentVideoId(it) }
+    videoTimeHook(YouTubeSponsorBlockConfig::setVideoTime)
+    hookVideoId(YouTubeSponsorBlockConfig::setCurrentVideoId)
 
     // Seekbar drawing
     var rectSetOnce = false
@@ -239,7 +250,7 @@ val SponsorBlock = patch(
     }
 
     // Initialize the player controller.
-    onCreateHook.add { YouTubeSponsorBlockConfig.initialize(it) }
+    onCreateHook(YouTubeSponsorBlockConfig::initialize)
 
     // Initialize the SponsorBlock view.
     val controls_overlay_layout =
@@ -260,6 +271,10 @@ val SponsorBlock = patch(
             val textView = adProgressTextField.get(it.thisObject) as TextView
             YouTubeSponsorBlockConfig.setAdProgressTextVisibility(textView.visibility)
         }
+    }
+
+    OfflineVideoEndpointFingerprint.hookMethod {
+        before { YouTubeSponsorBlockConfig.offlineVideoAction(it.args[2] as String, it.args[3] as Enum<*>) }
     }
 
     // FIXME: Skip buttons do not show in new player controls layout.

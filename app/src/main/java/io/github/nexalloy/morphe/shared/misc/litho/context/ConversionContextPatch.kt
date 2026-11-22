@@ -8,6 +8,7 @@ lateinit var identifierField: Field
 lateinit var pathBuilderField: Field
 lateinit var horizontalSwipeField: Field
 lateinit var heightConstraint: Field
+internal var commandEventDataDecorators: ((Any) -> List<*>?)? = null
 
 data class ConversionContext(val conversion: Any) : ContextInterface {
     override fun patch_getIdentifier() =
@@ -21,6 +22,9 @@ data class ConversionContext(val conversion: Any) : ContextInterface {
 
     override fun patch_getHorizontalCollectionSwipeProtector(): Any? =
         horizontalSwipeField.get(conversion)
+
+    override fun patch_getCommandEventDataDecorators(): List<*>? =
+        commandEventDataDecorators?.invoke(conversion)
 
     override fun toString() = conversion.toString()
 }

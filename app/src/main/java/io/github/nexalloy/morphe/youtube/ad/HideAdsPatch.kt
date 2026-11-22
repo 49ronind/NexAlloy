@@ -4,15 +4,13 @@ import android.view.View
 import app.morphe.extension.shared.Logger
 import app.morphe.extension.shared.ResourceUtils
 import app.morphe.extension.youtube.patches.components.AdsFilter
-import app.morphe.extension.youtube.settings.preference.ChannelWhitelistPreference
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedHelpers
 import io.github.nexalloy.morphe.shared.ad.HideFullscreenAds
 import io.github.nexalloy.morphe.shared.misc.litho.filter.addLithoFilter
 import io.github.nexalloy.morphe.shared.misc.proto.hookElement
-import io.github.nexalloy.morphe.shared.misc.settings.preference.NonInteractivePreference
 import io.github.nexalloy.morphe.shared.misc.settings.preference.SwitchPreference
-import io.github.nexalloy.morphe.youtube.layout.hide.general.HideHorizontalShelves
+import io.github.nexalloy.morphe.youtube.layout.hide.shelves.HideHorizontalShelves
 import io.github.nexalloy.morphe.youtube.misc.contexthook.Endpoint
 import io.github.nexalloy.morphe.youtube.misc.contexthook.addOSNameHook
 import io.github.nexalloy.morphe.youtube.misc.contexthook.clientContextHookPatch
@@ -20,6 +18,7 @@ import io.github.nexalloy.morphe.youtube.misc.engagement.EngagementPanelHook
 import io.github.nexalloy.morphe.youtube.misc.engagement.addEngagementPanelIdHook
 import io.github.nexalloy.morphe.youtube.misc.litho.filter.LithoFilter
 import io.github.nexalloy.morphe.youtube.misc.playservice.VersionCheck
+import io.github.nexalloy.morphe.youtube.misc.playservice.is_21_25_or_greater
 import io.github.nexalloy.morphe.youtube.misc.proto.elementProtoParserHookPatch
 import io.github.nexalloy.morphe.youtube.misc.settings.PreferenceScreen
 import io.github.nexalloy.morphe.youtube.shared.BuildClientContextBodyConstructorFingerprint
@@ -59,15 +58,23 @@ val HideAds = patch(
 
     // Hide video ads
 
-    setOf(
-        LoadVideoAdsFingerprint,
-        PlayerBytesAdLayoutFingerprint,
-    ).forEach { fingerprint ->
-        fingerprint.hookMethod {
-            before {
-                if (AdsFilter.hideVideoAds())
-                    it.result = null
+    PlayerBytesAdLayoutFingerprint.hookMethod {
+        before { if (AdsFilter.hideVideoAds()) it.result = null }
+    }
+
+    // Keep expiration triggers so suppressed ad slots can be released.
+    val category = ::adTriggerCategoryField.field
+    LoadVideoAdsFingerprint.hookMethod {
+        before {
+            if (AdsFilter.hideVideoAds()) {
+                it.args[0] = (it.args[0] as List<*>).filter { trigger -> category.getInt(trigger) == 6 }
             }
+        }
+    }
+    if (is_21_25_or_greater) {
+        val empty = PlayerBytesAdSchedulingFingerprint.method.returnType.getDeclaredMethod("empty")
+        PlayerBytesAdSchedulingFingerprint.hookMethod {
+            before { if (AdsFilter.hideVideoAds()) it.result = empty.invoke(null) }
         }
     }
 
@@ -143,13 +150,14 @@ val HideAds = patch(
     setOf(
         Endpoint.GET_WATCH,
         Endpoint.PLAYER,
-        Endpoint.REEL,
     ).forEach { endpoint ->
         addOSNameHook(
             endpoint,
             AdsFilter::hideVideoAds
         )
     }
+
+    addOSNameHook(Endpoint.REEL, AdsFilter::hideShortsAds)
 
     addOSNameHook(
         Endpoint.GUIDE,

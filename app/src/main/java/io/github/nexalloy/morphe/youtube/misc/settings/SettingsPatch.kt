@@ -1,13 +1,18 @@
 package io.github.nexalloy.morphe.youtube.misc.settings
 
 import android.app.Activity
+import android.widget.FrameLayout
 import app.morphe.extension.shared.ResourceUtils
+import app.morphe.extension.shared.settings.preference.ClearNewSettingsIndicatorPreference
 import app.morphe.extension.shared.settings.preference.ImportExportPreference
+import app.morphe.extension.shared.settings.preference.SeekBarPreference
 import app.morphe.extension.shared.settings.preference.about.MorpheAboutPreference
+import app.morphe.extension.youtube.patches.NativeSnackbarPatch
 import app.morphe.extension.youtube.settings.YouTubeActivityHook
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XC_MethodReplacement
 import io.github.nexalloy.R
+import io.github.nexalloy.hookMethod
 import io.github.nexalloy.invokeOriginalMethod
 import io.github.nexalloy.morphe.shared.misc.initialization.initializationPatch
 import io.github.nexalloy.morphe.shared.misc.settings.preference.BasePreference
@@ -16,10 +21,21 @@ import io.github.nexalloy.morphe.shared.misc.settings.preference.InputType
 import io.github.nexalloy.morphe.shared.misc.settings.preference.NonInteractivePreference
 import io.github.nexalloy.morphe.shared.misc.settings.preference.PreferenceScreenPreference
 import io.github.nexalloy.morphe.shared.misc.settings.preference.PreferenceScreenPreference.Sorting
+import io.github.nexalloy.morphe.shared.misc.settings.preference.SwitchPreference
 import io.github.nexalloy.morphe.shared.misc.settings.preference.TextPreference
+import io.github.nexalloy.morphe.shared.misc.settings.preference.noTitleUnsortedPreferenceCategory
 import io.github.nexalloy.morphe.shared.settings.preferences
+import io.github.nexalloy.morphe.youtube.insertLiteralOverride
 import io.github.nexalloy.morphe.youtube.layout.buttons.overlay.PlayerOverlayButtonsSettings
+import io.github.nexalloy.morphe.youtube.misc.commandrouter.commandRouterHookPatch
+import io.github.nexalloy.morphe.youtube.misc.fix.accessibility.fixAccessibilityPatch
+import io.github.nexalloy.morphe.youtube.misc.fix.guidecache.fixGuideCachePatch
+import io.github.nexalloy.morphe.youtube.misc.fix.padding.fixPagePaddingPatch
+import io.github.nexalloy.morphe.youtube.misc.playservice.is_21_42_or_greater
+import io.github.nexalloy.morphe.youtube.shared.YOUTUBE_MAIN_ACTIVITY_CLASS_TYPE
 import io.github.nexalloy.patch
+import io.github.nexalloy.scopedHook
+import org.luckypray.dexkit.wrap.DexMethod
 
 @Suppress("UNREACHABLE_CODE")
 val SettingsHook = patch(
@@ -27,6 +43,10 @@ val SettingsHook = patch(
 ) {
     dependsOn(
         PlayerOverlayButtonsSettings,
+        commandRouterHookPatch,
+        fixGuideCachePatch,
+        fixAccessibilityPatch,
+        fixPagePaddingPatch,
         initializationPatch()
     )
 
@@ -59,7 +79,19 @@ val SettingsHook = patch(
 
     // Remove other methods as they will break as the onCreate method is modified above.
     ::licenseActivityNOTonCreate.dexMethodList.forEach {
-        if (it.returnTypeName == "void") it.hookMethod(XC_MethodReplacement.DO_NOTHING)
+        if (it.returnTypeName == "void" && it.name != "onBackPressed") {
+            it.hookMethod(XC_MethodReplacement.DO_NOTHING)
+        }
+    }
+
+    val settingsActivityClass = ::licenseActivityClass.clazz
+    settingsActivityClass.getMethod("onBackPressed").hookMethod {
+        before {
+            if (!settingsActivityClass.isInstance(it.thisObject)) return@before
+            val activity = it.thisObject as Activity
+            if (!YouTubeActivityHook.handleBackPress(activity)) activity.finish()
+            it.result = null
+        }
     }
 
     // Update shared dark mode status based on YT theme.
@@ -70,6 +102,23 @@ val SettingsHook = patch(
             YouTubeActivityHook.updateLightDarkModeStatus(param.result as Enum<*>)
         }
     }
+
+    // Show extension messages in the YouTube snackbar using the shared command router.
+    DexMethod("$YOUTUBE_MAIN_ACTIVITY_CLASS_TYPE->onCreate(Landroid/os/Bundle;)V").hookMethod {
+        before { NativeSnackbarPatch.initialize() }
+    }
+
+    BottomUiContainerOnLayoutFingerprint.hookMethod(scopedHook(
+        FrameLayout::class.java.getDeclaredMethod("onLayout", Boolean::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType, Int::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+    ) {
+        after {
+            if (it.thisObject === outerParam.thisObject) {
+                NativeSnackbarPatch.removeExtraBottomRoom(it.thisObject as FrameLayout)
+            }
+        }
+    })
 
     // Add an "About" preference to the top.
     preferences += NonInteractivePreference(
@@ -93,7 +142,31 @@ val SettingsHook = patch(
 //        SwitchPreference("morphe_show_menu_icons")
 //    )
 
+    if (is_21_42_or_greater) {
+        insertLiteralOverride(45857115L, true)
+    }
+    // TODO: Port FixMediaSessionStopPatch's player ownership tracking for background-service stops
+    // and media-session stops before 21.42. This requires resolving the player at each call site.
+
+    PreferenceScreen.GENERAL.addPreferences(
+        SwitchPreference("morphe_native_snackbar", summary = true)
+    )
+
     PreferenceScreen.MISC.addPreferences(
+        // TODO Patch update notices need the upstream lifecycle and release channel integration.
+        // ListPreference("morphe_patches_update_notice"),
+        noTitleUnsortedPreferenceCategory(
+            NonInteractivePreference(
+                key = "morphe_settings_new_indicator_days",
+                tag = SeekBarPreference::class.java,
+                selectable = true
+            ),
+            NonInteractivePreference(
+                key = "morphe_settings_new_indicator_clear",
+                tag = ClearNewSettingsIndicatorPreference::class.java,
+                selectable = true
+            )
+        ),
         TextPreference(
             key = null,
             titleKey = "morphe_pref_import_export_title",
@@ -162,28 +235,32 @@ object PreferenceScreen : BasePreferenceScreen() {
         layout = "@layout/preference_with_icon",
     )
     val PLAYER = Screen(
-        key = "morphe_settings_screen_05_player",
+        key = "morphe_settings_screen_06_player",
+        titleKey = "morphe_settings_screen_05_player_title",
         summaryKey = null,
         icon = "@drawable/morphe_settings_screen_05_player",
         iconBold = "@drawable/morphe_settings_screen_05_player_bold",
         layout = "@layout/preference_with_icon",
     )
     val SHORTS = Screen(
-        key = "morphe_settings_screen_06_shorts",
+        key = "morphe_settings_screen_09_shorts",
+        titleKey = "morphe_settings_screen_06_shorts_title",
         summaryKey = null,
         icon = "@drawable/morphe_settings_screen_06_shorts",
         iconBold = "@drawable/morphe_settings_screen_06_shorts_bold",
         layout = "@layout/preference_with_icon",
     )
     val SEEKBAR = Screen(
-        key = "morphe_settings_screen_07_seekbar",
+        key = "morphe_settings_screen_08_seekbar",
+        titleKey = "morphe_settings_screen_07_seekbar_title",
         summaryKey = null,
         icon = "@drawable/morphe_settings_screen_07_seekbar",
         iconBold = "@drawable/morphe_settings_screen_07_seekbar_bold",
         layout = "@layout/preference_with_icon",
     )
     val SWIPE_CONTROLS = Screen(
-        key = "morphe_settings_screen_08_swipe_controls",
+        key = "morphe_settings_screen_11_swipe_controls",
+        titleKey = "morphe_settings_screen_08_swipe_controls_title",
         summaryKey = null,
         icon = "@drawable/morphe_settings_screen_08_swipe_controls",
         iconBold = "@drawable/morphe_settings_screen_08_swipe_controls_bold",
@@ -191,7 +268,8 @@ object PreferenceScreen : BasePreferenceScreen() {
         sorting = Sorting.UNSORTED,
     )
     val RETURN_YOUTUBE_DISLIKE = Screen(
-        key = "morphe_settings_screen_09_return_youtube_dislike",
+        key = "morphe_settings_screen_07_return_youtube_dislike",
+        titleKey = "morphe_settings_screen_09_return_youtube_dislike_title",
         summaryKey = null,
         icon = "@drawable/morphe_settings_screen_09_return_youtube_dislike",
         iconBold = "@drawable/morphe_settings_screen_09_return_youtube_dislike_bold",
@@ -207,7 +285,8 @@ object PreferenceScreen : BasePreferenceScreen() {
         sorting = Sorting.UNSORTED,
     )
     val MISC = Screen(
-        key = "morphe_settings_screen_11_misc",
+        key = "morphe_settings_screen_05_misc",
+        titleKey = "morphe_settings_screen_11_misc_title",
         summaryKey = null,
         icon = "@drawable/morphe_settings_screen_11_misc",
         iconBold = "@drawable/morphe_settings_screen_11_misc_bold",

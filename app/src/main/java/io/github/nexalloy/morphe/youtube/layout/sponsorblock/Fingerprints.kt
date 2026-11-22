@@ -3,14 +3,16 @@ package io.github.nexalloy.morphe.youtube.layout.sponsorblock
 import io.github.nexalloy.morphe.AccessFlags
 import io.github.nexalloy.morphe.Fingerprint
 import io.github.nexalloy.morphe.InstructionLocation.MatchAfterWithin
+import io.github.nexalloy.morphe.InstructionLocation.MatchBeforeImmediately
 import io.github.nexalloy.morphe.Opcode
 import io.github.nexalloy.morphe.OpcodesFilter
 import io.github.nexalloy.morphe.fieldAccess
 import io.github.nexalloy.morphe.findFieldDirect
 import io.github.nexalloy.morphe.findMethodDirect
+import io.github.nexalloy.morphe.methodCall
 import io.github.nexalloy.morphe.opcode
 import io.github.nexalloy.morphe.resourceMappings
-import io.github.nexalloy.morphe.youtube.shared.seekbarFingerprint
+import io.github.nexalloy.morphe.youtube.shared.SeekbarFingerprint
 
 internal object AppendTimeFingerprint : Fingerprint(
     accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.FINAL),
@@ -31,20 +33,22 @@ internal object AppendTimeFingerprint : Fingerprint(
     ),
 )
 
+internal object RectangleFieldInvalidatorFingerprint : Fingerprint(
+    classFingerprint = SeekbarFingerprint,
+    returnType = "V",
+    parameters = emptyList(),
+    filters = listOf(
+        methodCall(name = "invalidate"),
+        fieldAccess(type = "Landroid/graphics/Rect;", location = MatchBeforeImmediately())
+    )
+)
+
 val SponsorBarRect = findFieldDirect {
-    val clazz = seekbarFingerprint().declaredClass!!
-    clazz.findMethod {
-        matcher {
-            addInvoke {
-                name = "invalidate"
-                paramTypes("android.graphics.Rect")
-            }
-        }
-    }.single().usingFields.last { it.field.typeName == "android.graphics.Rect" }.field
+    RectangleFieldInvalidatorFingerprint.instructionMatches.last().instruction.fieldRef!!
 }
 
 val seekbarOnDrawFingerprint = findMethodDirect {
-    seekbarFingerprint().declaredClass!!.findMethod {
+    SeekbarFingerprint().declaredClass!!.findMethod {
         matcher {
             name = "onDraw"
         }

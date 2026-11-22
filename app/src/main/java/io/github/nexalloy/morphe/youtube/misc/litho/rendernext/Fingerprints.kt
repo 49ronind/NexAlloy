@@ -4,17 +4,21 @@ import io.github.nexalloy.RequireAppVersion
 import io.github.nexalloy.SkipTest
 import io.github.nexalloy.morphe.AccessFlags
 import io.github.nexalloy.morphe.Fingerprint
+import io.github.nexalloy.morphe.InstructionLocation.MatchAfterImmediately
+import io.github.nexalloy.morphe.InstructionLocation.MatchAfterWithin
 import io.github.nexalloy.morphe.Match
 import io.github.nexalloy.morphe.Opcode
 import io.github.nexalloy.morphe.fieldAccess
 import io.github.nexalloy.morphe.findFieldDirect
+import io.github.nexalloy.morphe.findMethodDirect
 import io.github.nexalloy.morphe.findMethodListDirect
 import io.github.nexalloy.morphe.literal
 import io.github.nexalloy.morphe.methodCall
+import io.github.nexalloy.morphe.opcode
 import io.github.nexalloy.morphe.parameters
+import io.github.nexalloy.morphe.shared.misc.debugging.BootstrapStoreReadFingerprint
 import io.github.nexalloy.morphe.string
 import org.luckypray.dexkit.DexKitBridge
-
 
 /**
  * Reads the enable_rendernext field of an Element proto, set by the server.
@@ -34,12 +38,14 @@ internal object RenderNextEnablementCheckFingerprint : Fingerprint(
 val RenderNextConfigField = findFieldDirect {
     val enablementCheck = RenderNextEnablementCheckFingerprint()
     Fingerprint(
+        accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.FINAL),
         filters = listOf(
             fieldAccess(
                 opcode = Opcode.IGET_BOOLEAN,
                 type = "Z"
             ),
-            methodCall(reference = enablementCheck)
+            methodCall(reference = enablementCheck),
+            methodCall(name = "toBuilder")
         )
     ).matchAll().first()
         .instructionMatches.first().instruction.fieldRef!!
@@ -92,7 +98,7 @@ val RenderNextConfigFieldReadFingerprint = findMethodListDirect {
  */
 @RequireAppVersion(minVersion = "20.29.00")
 internal object RenderNextTemplateCheckFingerprint : Fingerprint(
-    accessFlags = listOf(AccessFlags.STATIC),
+    isStatic = true,
     returnType = "Z",
     parameters = listOf("L", "Ljava/lang/String;", "Ljava/lang/String;"),
     filters = listOf(
@@ -101,3 +107,33 @@ internal object RenderNextTemplateCheckFingerprint : Fingerprint(
         methodCall(smali = "Ljava/lang/String;->substring(II)Ljava/lang/String;"),
     )
 )
+
+@RequireAppVersion("21.35.000")
+internal object PageFragmentRouteFingerprint : Fingerprint(
+    accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.FINAL),
+    returnType = "L",
+    parameters = listOf("L", "Z", "Z", "Z"),
+    filters = listOf(
+        string("top_level_browse_pane"),
+        literal(1073830434L),
+        methodCall(
+            opcode = Opcode.INVOKE_INTERFACE,
+            parameters = listOf("I"),
+            returnType = "Z",
+            location = MatchAfterWithin(5)
+        ),
+        opcode(Opcode.MOVE_RESULT, location = MatchAfterImmediately())
+    )
+)
+
+@get:RequireAppVersion("21.35.000")
+val pageFragmentRouteFlagMethod = findMethodDirect {
+    val reference = PageFragmentRouteFingerprint.instructionMatches[2].instruction.methodRef!!
+    // Hook the concrete bootstrap store, rather than its interface declaration.
+    Fingerprint(
+        definingClass = BootstrapStoreReadFingerprint().declaredClass!!.descriptor,
+        name = reference.name,
+        returnType = "Z",
+        parameters = listOf("I")
+    )()
+}

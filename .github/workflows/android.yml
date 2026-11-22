@@ -4,6 +4,10 @@ on:
   push:
     branches: [ "main" ]
 
+concurrency:
+  group: android-ci-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
 
@@ -54,16 +58,30 @@ jobs:
           app/build/outputs/apk/release
           app/build/outputs/mapping/release/mapping.txt
 
-    - name: Create AutoBuild Release
+    - name: Update AutoBuild Release
       run: |
         LATEST_REL=$(gh release view --json tagName -q .tagName)
         GIT_DESCRIBE=$(git rev-parse --short HEAD)
+        BUILD_TIME=$(TZ=UTC date --iso-8601=seconds)
+        BUILD_TIME_TEXT=$(LC_ALL=C TZ=UTC date --date="$BUILD_TIME" '+%B %-d, %Y %H:%M')
+        RELEASE_NOTES=$(mktemp)
+        cat > "$RELEASE_NOTES" <<EOF
+        Nightly build from commit ${GIT_DESCRIBE}.
+        Build time: <relative-time tense="past" datetime="${BUILD_TIME}">${BUILD_TIME_TEXT}</relative-time>
+        See changes: https://github.com/${{ github.repository }}/compare/${LATEST_REL}...main
+        EOF
+        APK_NAME="NexAlloy-${GIT_DESCRIBE}.apk"
+        PREVIOUS_ASSETS=$(gh release view autobuild --json assets --jq '.assets[].name')
         cd app/build/outputs/apk/release/
-        mv app-release.apk NexAlloy-${GIT_DESCRIBE}.apk
-        gh release delete autobuild --yes || true
-        gh release create autobuild NexAlloy-${GIT_DESCRIBE}.apk \
-          --prerelease \
-          --title "Nightly Build ${GIT_DESCRIBE}" \
-          --notes "Nightly build from commit ${GIT_DESCRIBE}. See changes: https://github.com/${{ github.repository }}/compare/${LATEST_REL}...main"
+        mv app-release.apk "$APK_NAME"
+        gh release upload autobuild "$APK_NAME" --clobber
+        gh release edit autobuild \
+          --title "Nightly Build" \
+          --notes-file "$RELEASE_NOTES"
+        while IFS= read -r asset; do
+          if [[ "$asset" == NexAlloy-*.apk && "$asset" != "$APK_NAME" ]]; then
+            gh release delete-asset autobuild "$asset" --yes
+          fi
+        done <<< "$PREVIOUS_ASSETS"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

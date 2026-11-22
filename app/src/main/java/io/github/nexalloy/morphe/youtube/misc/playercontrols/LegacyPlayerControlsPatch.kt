@@ -7,9 +7,16 @@ import android.widget.RelativeLayout
 import app.morphe.extension.shared.ResourceUtils
 import app.morphe.extension.shared.Utils
 import app.morphe.extension.youtube.patches.LegacyPlayerControlsPatch
+import app.morphe.extension.youtube.patches.spans.MetapanelTextColorFilter
 import io.github.nexalloy.HookDsl
 import io.github.nexalloy.IHookCallback
+import io.github.nexalloy.PatchExecutor
+import io.github.nexalloy.morphe.shared.layout.theme.lithoColorHookPatch
+import io.github.nexalloy.morphe.shared.layout.theme.lithoDrawableColorHook
+import io.github.nexalloy.morphe.shared.misc.litho.context.ConversionContext
 import io.github.nexalloy.morphe.shared.misc.settings.preference.SwitchPreference
+import io.github.nexalloy.morphe.shared.misc.spans.addSpanFilter
+import io.github.nexalloy.morphe.shared.misc.spans.inclusiveSpanPatch
 import io.github.nexalloy.morphe.youtube.insertLiteralOverride
 import io.github.nexalloy.morphe.youtube.misc.playservice.VersionCheck
 import io.github.nexalloy.morphe.youtube.misc.playservice.is_20_28_or_greater
@@ -17,9 +24,17 @@ import io.github.nexalloy.morphe.youtube.misc.playservice.is_20_30_or_greater
 import io.github.nexalloy.morphe.youtube.misc.playservice.is_20_31_or_greater
 import io.github.nexalloy.morphe.youtube.misc.playservice.is_21_04_or_greater
 import io.github.nexalloy.morphe.youtube.misc.playservice.is_21_05_or_greater
+import io.github.nexalloy.morphe.youtube.misc.playservice.is_21_08_or_greater
+import io.github.nexalloy.morphe.youtube.misc.playservice.is_21_11_or_greater
+import io.github.nexalloy.morphe.youtube.misc.playservice.is_21_15_or_greater
+import io.github.nexalloy.morphe.youtube.misc.playservice.is_21_29_or_greater
+import io.github.nexalloy.morphe.youtube.misc.playservice.is_21_30_or_greater
 import io.github.nexalloy.morphe.youtube.misc.playservice.is_21_36_or_greater
+import io.github.nexalloy.morphe.youtube.misc.playservice.is_21_38_or_greater
+import io.github.nexalloy.morphe.youtube.misc.playservice.is_21_41_or_greater
 import io.github.nexalloy.morphe.youtube.misc.settings.PreferenceScreen
 import io.github.nexalloy.patch
+import io.github.nexalloy.scopedHook
 import org.luckypray.dexkit.wrap.DexMethod
 
 class ControlInitializer(
@@ -46,7 +61,7 @@ fun addLegacyBottomControl(layout: Int) {
 
 private var newPlayerControlsOverride = false
 
-internal fun disableNewPlayerControlsFeatureFlag() {
+internal fun PatchExecutor.disableNewPlayerControlsFeatureFlag() {
     if (newPlayerControlsOverride) return
     newPlayerControlsOverride = true
 
@@ -54,8 +69,21 @@ internal fun disableNewPlayerControlsFeatureFlag() {
         insertLiteralOverride(45698813, LegacyPlayerControlsPatch::forcePlayerSeekbar)
     }
 
-    if (is_21_04_or_greater) {
-        insertLiteralOverride(45752335L)
+    if (is_21_04_or_greater && !is_21_41_or_greater) {
+        insertLiteralOverride(45752335L, LegacyPlayerControlsPatch::disableNewPlayerOverlays)
+
+        if (is_21_36_or_greater) {
+            // With the flag off the autonav end screen is laid out over the miniplayer
+            // as if it was the full player, so it is given the value the app has.
+            val flagMethod = NewPlayerOverlaysFeatureFlagFingerprint.member
+            ::autonavEndscreenFlagCallers.dexMethodList.forEach { method ->
+                method.hookMethod(scopedHook(flagMethod) {
+                    after {
+                        it.result = LegacyPlayerControlsPatch.getOriginalNewPlayerOverlays(it.result as Boolean)
+                    }
+                })
+            }
+        }
     }
 }
 
@@ -114,6 +142,8 @@ val LegacyPlayerControls = patch(
     dependsOn(
         PlayerControlsOverlayVisibility,
         VersionCheck,
+        inclusiveSpanPatch,
+        lithoColorHookPatch { is_21_30_or_greater },
     )
 
     if (is_20_31_or_greater && !is_21_36_or_greater) {
@@ -126,10 +156,52 @@ val LegacyPlayerControls = patch(
         disableNewPlayerControlsFeatureFlag()
     }
 
-    // Override flags that interfere with old player icons override.
-    insertLiteralOverride(45757309, LegacyPlayerControlsPatch::allowModernPlayerLayoutFlags)
-    insertLiteralOverride(45771730, LegacyPlayerControlsPatch::allowModernPlayerLayoutFlags)
-    insertLiteralOverride(45763727, LegacyPlayerControlsPatch::allowModernPlayerLayoutFlags)
+    if (is_21_08_or_greater) {
+        // The text of the video metadata panel can have the dark theme colors
+        // of the elevated player, when the elevated player is turned off.
+        addSpanFilter(MetapanelTextColorFilter())
+
+        // The icons can also have the dark theme tint. The tint is read when the image is loaded,
+        // without the conversion context, so the image component registers its images
+        // with their conversion context when it prepares them.
+        ::imageComponentPrepareMethod.hookMethod {
+            val contextField = ::imageComponentConversionContextField.field
+            val imageFields = ::imageComponentImageFields.fieldList
+            before {
+                val context = contextField.get(it.thisObject) ?: return@before
+                imageFields.forEach { field ->
+                    LegacyPlayerControlsPatch.registerImage(ConversionContext(context), field.get(it.thisObject))
+                }
+            }
+        }
+
+        ::imageTintColorMethod.hookMethod {
+            before { LegacyPlayerControlsPatch.setTintImage(it.args[0]) }
+            after { it.result = LegacyPlayerControlsPatch.getImageTintColor(it.result as Int) }
+        }
+
+        // The page indicator of the comments button can also have the dark theme colors.
+        lithoDrawableColorHook(LegacyPlayerControlsPatch::getBackgroundColor)
+
+        // The elevated player shows the video metadata without a background over the
+        // ambient mode colors, so the light theme text can not be read.
+        // The metadata panel also has its own forced dark and light themes, which do not depend
+        // on the elevated player. With the forced dark theme and the elevated player off, the
+        // white text is drawn on the light background of the watch page, so turn all of them off
+        // and the metadata panel uses the app theme.
+        insertLiteralOverride(45757309L, LegacyPlayerControlsPatch::useElevatedPlayer)
+        if (is_21_29_or_greater) insertLiteralOverride(45813114L, false)
+        if (is_21_38_or_greater) insertLiteralOverride(45840190L, false)
+    }
+
+    // Comments teaser A/B test: shows a small comments card below the player time bar,
+    // which can be too narrow to read in portrait.
+    // It also crashes the app on startup with the old player icons, so always turn it off.
+    if (is_21_15_or_greater) insertLiteralOverride(45771730L, false)
+    // Watch feed resize A/B test: every scroll event of the watch next feed
+    // resizes the player and relayouts the watch page, and scrolling lags.
+    // It also interferes with the old player icons, so always turn it off.
+    if (is_21_11_or_greater) insertLiteralOverride(45763727L, false)
     fun overrideExploderLayout(id: Long) = insertLiteralOverride(
         id, LegacyPlayerControlsPatch::usePlayerBottomControlsExploderLayout
     )
