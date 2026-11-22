@@ -35,7 +35,7 @@ class AppPatchInfo(
     val dexSource: DexSource = DexSource.APK_PATH,
 )
 
-val appPatchConfigurations = listOf(
+val appPatchConfigurations: List<AppPatchInfo> = listOf(
     AppPatchInfo("Proton VPN", "ch.protonvpn.android", ProtonVpnPatches),
     AppPatchInfo("MovieBox", "com.community.oneroom", MovieBoxPatches),
     AppPatchInfo("DramaBox", "com.storymatrix.drama", DramaBoxPatches),
@@ -61,5 +61,5 @@ val appPatchConfigurations = listOf(
     AppPatchInfo("FreeReels", "com.freereels.app", FreeReelsPatches),
 )
 
-val patchesByPackage = appPatchConfigurations.associate { it.packageName to it.patches }
-val dexSourceByPackage = appPatchConfigurations.associate { it.packageName to it.dexSource }
+val patchesByPackage: Map<String, Array<Patch>> = appPatchConfigurations.associate { it.packageName to it.patches }
+val dexSourceByPackage: Map<String, DexSource> = appPatchConfigurations.associate { it.packageName to it.dexSource }

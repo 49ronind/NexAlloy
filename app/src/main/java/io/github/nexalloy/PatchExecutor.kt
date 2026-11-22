@@ -167,7 +167,7 @@ class PatchExecutor(
     // cache
     private val moduleRel = BuildConfig.COMMIT_HASH
     private var cache = SharedPrefCache(appContext)
-    private val dexSource = dexSourceByPackage[lpparam.packageName] ?: DexSource.APK_PATH
+    private val dexSource: DexSource = dexSourceByPackage[lpparam.packageName] ?: DexSource.APK_PATH
 
     init {
         System.loadLibrary("dexkit")
