@@ -14,9 +14,9 @@ jobs:
       id: info
       run: |
         BRANCH="${GITHUB_REF##*/}"
-        if [ "$BRANCH" = "root" ] || [ "$BRANCH" = "nonroot" ]; then
+        if [ "$BRANCH" = "root" ]; then
           echo "prerelease=0" >> $GITHUB_OUTPUT
-          echo 'branches=["root","nonroot"]' >> $GITHUB_OUTPUT
+          echo 'branches=["root"]' >> $GITHUB_OUTPUT
         else
           echo "prerelease=1" >> $GITHUB_OUTPUT
           echo "branches=[\"${BRANCH}\"]" >> $GITHUB_OUTPUT
@@ -42,9 +42,7 @@ jobs:
       with:
         java-version: '17'
         distribution: 'temurin'
-
-    - name: Set up Gradle
-      uses: gradle/actions/setup-gradle@v4
+        cache: gradle
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
@@ -63,7 +61,7 @@ jobs:
           printf "KEYSTORE_FILE=../release.jks\n" >> signing.properties
 
     - name: Build Release
-      run: ./gradlew --build-cache assembleRelease
+      run: ./gradlew assembleRelease
 
     - name: Upload a Release Artifact
       uses: actions/upload-artifact@v7
@@ -165,14 +163,12 @@ jobs:
       id: body
       run: |
         PRERELEASE=${{ needs.setup.outputs.prerelease }}
+        BRANCH="${GITHUB_REF##*/}"
+        SHORT_SHA="${GITHUB_SHA::8}"
         if [ "$PRERELEASE" = "1" ]; then
-          BRANCH="${GITHUB_REF##*/}"
-          echo "body=Build from branch: ${BRANCH}" >> $GITHUB_OUTPUT
+          echo "body=Prerelease build from branch ${BRANCH} (${SHORT_SHA})." >> $GITHUB_OUTPUT
         else
-          echo "body<<EOF" >> $GITHUB_OUTPUT
-          echo "Download non-root version from:" >> $GITHUB_OUTPUT
-          echo "https://github.com/gnadgnaoh/NexAlloy-NonRoot/releases" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "body=NexAlloy root release built from ${BRANCH} (${SHORT_SHA})." >> $GITHUB_OUTPUT
         fi
 
     - name: Create Release
