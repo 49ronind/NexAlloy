@@ -30,7 +30,6 @@
         <package android:name="com.zhiliaoapp.musically" />
         <package android:name="com.halo.reels.movie.fast.pro" />
         <package android:name="com.freereels.app" />
-        <package android:name="bin.mt.plus" />
     </queries>
 
     <application
