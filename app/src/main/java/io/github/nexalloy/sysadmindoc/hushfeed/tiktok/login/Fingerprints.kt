@@ -1,4 +1,4 @@
-package io.github.nexalloy.icysymmetra.morphe.tiktok.login
+package io.github.nexalloy.sysadmindoc.hushfeed.tiktok.login
 
 import io.github.nexalloy.morphe.Fingerprint
 import org.luckypray.dexkit.query.enums.StringMatchType

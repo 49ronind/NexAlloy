@@ -1,10 +1,10 @@
-package io.github.nexalloy.icysymmetra.morphe.tiktok.login
+package io.github.nexalloy.sysadmindoc.hushfeed.tiktok.login
 
 import io.github.nexalloy.patch
 
 val DisableForcedLogin = patch(
     name = "Disable login requirement",
-    description = "Removes TikTok's mandatory login gate from browsing flows.",
+    description = "Stops TikTok from forcing sign-in before browsing (HushFeed).",
 ) {
     runCatching {
         MandatoryLoginEnableFingerprint.hookMethod {

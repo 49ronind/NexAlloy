@@ -16,7 +16,7 @@ import io.github.nexalloy.rushiranpise.morphe.dramabox.DramaBoxPatches
 import io.github.nexalloy.rushiranpise.morphe.adguard.AdGuardPatches
 import io.github.nexalloy.rushiranpise.morphe.sdmaidse.SdMaidSePatches
 import io.github.nexalloy.rushiranpise.morphe.mangaplus.MangaPlusPatches
-import io.github.nexalloy.icysymmetra.morphe.tiktok.TikTokPatches
+import io.github.nexalloy.sysadmindoc.hushfeed.tiktok.TikTokPatches
 import io.github.nexalloy.revanced.photomath.PhotomathPatches
 import io.github.nexalloy.revanced.strava.StravaPatches
 import io.github.nexalloy.revanced.zalo.ZaloPatches 

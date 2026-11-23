@@ -1,6 +1,8 @@
-package io.github.nexalloy.icysymmetra.morphe.tiktok.interaction
+package io.github.nexalloy.sysadmindoc.hushfeed.tiktok.interaction
 
 import io.github.nexalloy.morphe.Fingerprint
+import io.github.nexalloy.morphe.Opcode
+import io.github.nexalloy.morphe.opcodes
 import org.luckypray.dexkit.query.enums.StringMatchType
 
 object AntiRecordingAddedFingerprint : Fingerprint(
@@ -23,13 +25,6 @@ object AntiRecordingRemovedFingerprint : Fingerprint(
     }
 }
 
-object VideoEngineSetLoopingFingerprint : Fingerprint(
-    definingClass = "Lcom/ss/ttvideoengine/TTVideoEngine;",
-    name = "setLooping",
-    returnType = "V",
-    parameters = listOf("Z"),
-)
-
 object LongPressRepostGateFingerprint : Fingerprint(
     definingClass = "Lcom/ss/android/ugc/aweme/feed/assem/digg/VideoDiggAssem;",
     returnType = "Z",
@@ -40,6 +35,21 @@ object LongPressRepostGateFingerprint : Fingerprint(
     ),
 )
 
-object SetSeekBarShowTypeFingerprint : Fingerprint(
-    strings = listOf("seekbar show type change, change to:"),
+object LongPressQuickShareGateCallerFingerprint : Fingerprint(
+    returnType = "Z",
+    parameters = emptyList(),
+    custom = {
+        opcodes(
+            Opcode.INVOKE_STATIC, Opcode.MOVE_RESULT, Opcode.CONST_4, Opcode.CONST_4, Opcode.IF_EQ,
+            Opcode.INVOKE_STATIC, Opcode.MOVE_RESULT, Opcode.CONST_4, Opcode.IF_NE,
+            Opcode.INVOKE_STATIC, Opcode.MOVE_RESULT, Opcode.IF_NEZ, Opcode.CONST_4, Opcode.RETURN,
+        )
+    },
+)
+
+object CircleSearchBlockFingerprint : Fingerprint(
+    name = "invoke",
+    returnType = "Ljava/lang/Object;",
+    parameters = emptyList(),
+    strings = listOf("circle_search_block"),
 )
