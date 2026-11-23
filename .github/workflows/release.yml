@@ -131,31 +131,37 @@ jobs:
 
     - name: Rename APKs
       run: |
-        TAG=${{ steps.tag.outputs.tag }}
+        TAG="${{ steps.tag.outputs.tag }}"
+        DEFAULT_BRANCH="${GITHUB_REF##*/}"
 
         shopt -s nullglob
         dirs=(artifacts/nexalloy-ci-*-release-apk)
         shopt -u nullglob
 
-        if [ ${#dirs[@]} -eq 0 ]; then
-          echo "Error: No release APK directories found matching artifacts/nexalloy-ci-*-release-apk" >&2
-          exit 1
-        fi
-
         found=0
-        for dir in "${dirs[@]}"; do
-          NAME=$(basename "$dir")
-          BRANCH=$(echo "$NAME" | sed 's/nexalloy-ci-\(.*\)-release-apk/\1/')
+        if [ ${#dirs[@]} -gt 0 ]; then
+          for dir in "${dirs[@]}"; do
+            NAME=$(basename "$dir")
+            BRANCH=$(echo "$NAME" | sed 's/nexalloy-ci-\(.*\)-release-apk/\1/')
 
-          APK=$(find "$dir" -type f -name "*.apk" | head -1)
+            APK=$(find "$dir" -type f -name "*.apk" | head -1)
+            if [ -n "$APK" ]; then
+              mv "$APK" "artifacts/NexAlloy-${BRANCH}-release-${TAG}.apk"
+              found=$((found + 1))
+            fi
+          done
+        else
+          # Single-artifact downloads extract flat into artifacts/ without an artifact-name subdir
+          APK=$(find artifacts -type f -name "*.apk" | head -1)
           if [ -n "$APK" ]; then
-            mv "$APK" "artifacts/NexAlloy-${BRANCH}-release-${TAG}.apk"
+            mv "$APK" "artifacts/NexAlloy-${DEFAULT_BRANCH}-release-${TAG}.apk"
             found=$((found + 1))
           fi
-        done
+        fi
 
         if [ "$found" -eq 0 ]; then
-          echo "Error: No APK files found to rename" >&2
+          echo "Error: No APK files found to rename under artifacts/" >&2
+          find artifacts -maxdepth 3 >&2 || true
           exit 1
         fi
 
