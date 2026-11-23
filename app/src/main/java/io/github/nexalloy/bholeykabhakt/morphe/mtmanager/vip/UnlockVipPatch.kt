@@ -5,7 +5,6 @@ import android.app.Application
 import android.os.Bundle
 import android.os.SystemClock
 import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
 import io.github.nexalloy.hookMethod
 import io.github.nexalloy.patch
 import java.util.concurrent.atomic.AtomicBoolean
@@ -100,7 +99,7 @@ val UnlockVip = patch(
     fun hookDialogEvent(className: String, methodName: String, event: Int) {
         runCatching {
             val clazz = classLoader.loadClass(className)
-            XposedHelpers.findMethodExact(clazz, methodName).hookMethod {
+            clazz.getDeclaredMethod(methodName).hookMethod {
                 before {
                     if (event >= 0) ensureNativeVipHooks()
                     onDialogEvent(event)
